@@ -1,0 +1,81 @@
+# =========================
+# FRONTEND (Node.js / Next.js / React)
+# =========================
+# Dependencies
+frontend/node_modules/
+node_modules/
+npm-debug.log
+yarn-error.log
+
+# Next.js build output
+.next/
+out/
+build/
+
+# =========================
+# BACKEND (Java / Spring Boot)
+# =========================
+# Compiled class files and build directories
+*.class
+target/
+build/
+bin/
+
+# Package Files
+*.jar
+*.war
+*.ear
+
+# =========================
+# DATA & MACHINE LEARNING (Python / R)
+# =========================
+# Environments and cache
+__pycache__/
+*.py[cod]
+*$py.class
+venv/
+env/
+.venv/
+
+# Jupyter Notebooks
+.ipynb_checkpoints/
+
+# Large Datasets (Preventing the 100MB error again!)
+*.csv
+*.dat
+*.out
+*.log
+*.sqlite
+*.db
+
+# R
+.Rhistory
+.RData
+.Ruserdata
+
+# =========================
+# ENVIRONMENT VARIABLES
+# =========================
+# Local environment files (NEVER commit these)
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+
+# =========================
+# OS & IDE FILES
+# =========================
+# Windows / Mac
+Thumbs.db
+.DS_Store
+
+# IDEs (VS Code, IntelliJ, Eclipse)
+.vscode/
+.idea/
+*.iml
+*.ipr
+*.iws
+.project
+.classpath
+.settings/

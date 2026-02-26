@@ -1,0 +1,57 @@
+﻿@import url("https://fonts.googleapis.com/css2?family=Syne:wght@400;600;700;800&family=Instrument+Sans:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap");
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --bg:          #070D1A;
+  --surface:     #0A1628;
+  --surface-2:   #0F2040;
+  --border:      rgba(0,217,181,0.12);
+  --border-hover:rgba(0,217,181,0.30);
+  --teal:        #00D9B5;
+  --teal-dim:    rgba(0,217,181,0.10);
+  --text:        #E2E8F0;
+  --muted:       #64748B;
+  --dim:         #94A3B8;
+  --critical:    #EF4444;
+  --high:        #F97316;
+  --medium:      #EAB308;
+  --success:     #22C55E;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: "Instrument Sans", sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+::-webkit-scrollbar { width: 5px; }
+::-webkit-scrollbar-track { background: var(--surface); }
+::-webkit-scrollbar-thumb { background: var(--surface-2); border-radius: 3px; }
+
+.shimmer {
+  background: linear-gradient(90deg, var(--teal) 0%, #5eead4 50%, var(--teal) 100%);
+  background-size: 200% 100%;
+  animation: shimmer 2s linear infinite;
+}
+
+@keyframes shimmer {
+  0%   { background-position: -200% 0; }
+  100% { background-position:  200% 0; }
+}
+
+@keyframes fadeUp {
+  from { opacity: 0; transform: translateY(14px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+.fade-up  { animation: fadeUp 0.4s ease both; }
+.delay-1  { animation-delay: 0.08s; }
+.delay-2  { animation-delay: 0.16s; }
+.delay-3  { animation-delay: 0.24s; }
+.delay-4  { animation-delay: 0.32s; }
