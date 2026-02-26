@@ -31,6 +31,10 @@ export interface Insight {
   type: string; severity: string; headline: string
   what_it_means: string; what_to_do: string; column?: string | string[]
   business_impact?: string; deep_dive?: string
+  aggregated?: boolean; count?: number
+  model_context_note?: string
+  pairs?: { var1: string; var2: string; correlation: number }[]
+  affected_columns?: string[]
 }
 
 export interface ColumnRelationship {
@@ -88,8 +92,10 @@ async function call(path: string, opts?: RequestInit) {
   return res
 }
 
-export const uploadCSV = async (file: File) => {
+export const uploadCSV = async (file: File, context?: string, targetColumn?: string) => {
   const form = new FormData(); form.append("file", file)
+  if (context) form.append("context", context)
+  if (targetColumn) form.append("target_column", targetColumn)
   return (await call("/analyze", { method: "POST", body: form })).json()
 }
 

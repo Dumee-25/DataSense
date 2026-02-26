@@ -22,6 +22,23 @@ function Badge({ sev }: { sev: string }) {
   )
 }
 
+function CopyButton({ text }: { text: string }) {
+  const [copied, setCopied] = useState(false)
+  return (
+    <button
+      className="px-2 py-0.5 rounded text-xs transition-colors"
+      style={{ background: copied ? "rgba(0,217,181,0.15)" : "var(--surface-2)", color: copied ? "var(--teal)" : "var(--muted)" }}
+      onClick={(e) => {
+        e.stopPropagation()
+        navigator.clipboard.writeText(text)
+        setCopied(true)
+        setTimeout(() => setCopied(false), 1500)
+      }}>
+      {copied ? "✓ copied" : "copy"}
+    </button>
+  )
+}
+
 function FindingCard({ item }: { item: Insight }) {
   const [open, setOpen] = useState(false)
   const col = Array.isArray(item.column) ? item.column.join(", ") : item.column
@@ -37,7 +54,15 @@ function FindingCard({ item }: { item: Insight }) {
         onClick={() => setOpen(!open)}>
         <Badge sev={item.severity} />
         <div className="flex-1">
-          <p className="text-sm font-medium" style={{ color: "var(--text)" }}>{item.headline}</p>
+          <div className="flex items-center gap-2">
+            <p className="text-sm font-medium" style={{ color: "var(--text)" }}>{item.headline}</p>
+            {item.aggregated && item.count && (
+              <span className="px-1.5 py-0.5 rounded text-xs font-mono"
+                style={{ background: "rgba(0,217,181,0.1)", color: "var(--teal)" }}>
+                ×{item.count}
+              </span>
+            )}
+          </div>
           {col && (
             <p className="text-xs font-mono mt-0.5" style={{ color: "var(--muted)" }}>{col}</p>
           )}
@@ -60,7 +85,52 @@ function FindingCard({ item }: { item: Insight }) {
             </div>
           )}
 
-          {/* Business impact — NEW */}
+          {/* Model context note — shows relevance to recommended model (Fix 4) */}
+          {item.model_context_note && (
+            <div className="px-4 py-2">
+              <div className="p-3 rounded-lg" style={{ background: "rgba(0,217,181,0.06)" }}>
+                <p className="text-xs font-semibold mb-1" style={{ color: "var(--teal)" }}>MODEL CONTEXT</p>
+                <p className="text-sm leading-relaxed" style={{ color: "var(--dim)" }}>{item.model_context_note}</p>
+              </div>
+            </div>
+          )}
+
+          {/* Aggregated sub-items — expandable list of affected columns/pairs */}
+          {item.aggregated && item.affected_columns && item.affected_columns.length > 0 && (
+            <div className="px-4 py-2">
+              <p className="text-xs font-semibold mb-1.5" style={{ color: "var(--muted)" }}>AFFECTED COLUMNS</p>
+              <div className="flex flex-wrap gap-1.5">
+                {item.affected_columns.map((c: string) => (
+                  <span key={c} className="px-2 py-0.5 rounded text-xs font-mono"
+                    style={{ background: "var(--surface-2)", color: "var(--dim)" }}>{c}</span>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {item.aggregated && item.pairs && item.pairs.length > 0 && (
+            <div className="px-4 py-2">
+              <p className="text-xs font-semibold mb-1.5" style={{ color: "var(--muted)" }}>CORRELATED PAIRS</p>
+              <div className="space-y-1">
+                {item.pairs.slice(0, 8).map((p: any, i: number) => (
+                  <div key={i} className="flex items-center gap-2 text-xs font-mono"
+                    style={{ color: "var(--dim)" }}>
+                    <span>{p.var1}</span>
+                    <span style={{ color: "var(--muted)" }}>↔</span>
+                    <span>{p.var2}</span>
+                    <span className="ml-auto" style={{ color: "var(--teal)" }}>{p.correlation > 0 ? '+' : ''}{p.correlation.toFixed(3)}</span>
+                  </div>
+                ))}
+                {item.pairs.length > 8 && (
+                  <p className="text-xs" style={{ color: "var(--muted)" }}>
+                    …and {item.pairs.length - 8} more pairs
+                  </p>
+                )}
+              </div>
+            </div>
+          )}
+
+          {/* Business impact */}
           {item.business_impact && (
             <div className="px-4 py-2">
               <div className="p-3 rounded-lg" style={{
@@ -72,17 +142,20 @@ function FindingCard({ item }: { item: Insight }) {
             </div>
           )}
 
-          {/* Action */}
+          {/* Action with copy button */}
           {item.what_to_do && (
             <div className="px-4 py-2">
               <div className="p-3 rounded-lg" style={{ background: "var(--surface-2)" }}>
-                <p className="text-xs font-semibold mb-1" style={{ color: "var(--teal)" }}>ACTION</p>
+                <div className="flex items-center justify-between mb-1">
+                  <p className="text-xs font-semibold" style={{ color: "var(--teal)" }}>ACTION</p>
+                  <CopyButton text={item.what_to_do} />
+                </div>
                 <p className="text-sm whitespace-pre-wrap" style={{ color: "var(--text)" }}>{item.what_to_do}</p>
               </div>
             </div>
           )}
 
-          {/* Deep dive — NEW, only on critical issues */}
+          {/* Deep dive */}
           {item.deep_dive && (
             <div className="px-4 py-2 pb-4">
               <div className="p-3 rounded-lg border"
@@ -123,6 +196,8 @@ export default function ResultsPage() {
   const [data, setData]       = useState<FullResults | null>(null)
   const [loading, setLoading] = useState(true)
   const [tab, setTab]         = useState<Tab>("summary")
+  const [sevFilter, setSevFilter] = useState<Record<string,boolean>>({ critical: true, high: true, medium: true })
+  const [corrThreshold, setCorrThreshold] = useState(0.0)
 
   useEffect(() => {
     fetchResults(jobId).then(r => { setData(r); setLoading(false) }).catch(() => router.push("/"))
@@ -275,20 +350,59 @@ export default function ResultsPage() {
         )}
 
         {/* ══ FINDINGS ══ */}
-        {tab === "findings" && (
-          <div className="space-y-2.5 fade-up">
-            {allFindings.length === 0 ? (
-              <div className="text-center py-14" style={{ color: "var(--muted)" }}>
-                <p className="text-4xl mb-2">✓</p>
-                <p>No significant issues — data looks clean.</p>
+        {tab === "findings" && (() => {
+          const filtered = allFindings.filter(f => sevFilter[f.severity] !== false)
+          return (
+            <div className="space-y-2.5 fade-up">
+              {/* severity toggle bar */}
+              <div className="flex items-center gap-2 mb-1">
+                <span className="text-xs" style={{ color: "var(--muted)" }}>Filter:</span>
+                {(["critical","high","medium"] as const).map(s => {
+                  const active = sevFilter[s] !== false
+                  const c = SEV[s].color
+                  return (
+                    <button key={s}
+                      className="px-2.5 py-1 rounded-full text-xs font-semibold transition-all"
+                      style={{
+                        background: active ? `${c}22` : "var(--surface-2)",
+                        color: active ? c : "var(--muted)",
+                        border: `1px solid ${active ? `${c}44` : "transparent"}`,
+                      }}
+                      onClick={() => setSevFilter(p => ({ ...p, [s]: !p[s] }))}>
+                      {s.charAt(0).toUpperCase()+s.slice(1)}
+                    </button>
+                  )
+                })}
+                <span className="ml-auto text-xs font-mono" style={{ color: "var(--muted)" }}>
+                  {filtered.length}/{allFindings.length}
+                </span>
               </div>
-            ) : allFindings.map((f,i) => <FindingCard key={i} item={f} />)}
-          </div>
-        )}
+              {filtered.length === 0 ? (
+                <div className="text-center py-14" style={{ color: "var(--muted)" }}>
+                  <p className="text-4xl mb-2">✓</p>
+                  <p>{allFindings.length === 0 ? "No significant issues — data looks clean." : "All findings filtered out. Toggle a severity level above."}</p>
+                </div>
+              ) : filtered.map((f,i) => <FindingCard key={i} item={f} />)}
+            </div>
+          )
+        })()}
 
         {/* ══ RELATIONS ══ */}
         {tab === "relations" && (
           <div className="space-y-4 fade-up">
+            {/* correlation threshold slider */}
+            {colRels.length > 0 && (
+              <div className="flex items-center gap-3 p-3 rounded-xl" style={{ background: "var(--surface)", border: "1px solid var(--border)" }}>
+                <span className="text-xs whitespace-nowrap" style={{ color: "var(--muted)" }}>Min |r|:</span>
+                <input type="range" min={0} max={0.99} step={0.01}
+                  value={corrThreshold}
+                  onChange={e => setCorrThreshold(parseFloat(e.target.value))}
+                  className="flex-1 accent-teal-400 h-1.5" />
+                <span className="text-xs font-mono w-10 text-right" style={{ color: "var(--teal)" }}>
+                  {corrThreshold.toFixed(2)}
+                </span>
+              </div>
+            )}
             {imbalance && (
               <div className="p-5 rounded-2xl" style={{ background: "var(--surface)", border: "1px solid rgba(239,68,68,0.25)" }}>
                 <p className="text-xs font-semibold mb-2" style={{ color: "var(--critical)", fontFamily: "Syne, sans-serif" }}>
@@ -307,10 +421,15 @@ export default function ResultsPage() {
                         }}>{t.difficulty}</span>
                       </div>
                       <p className="text-sm mb-2" style={{ color: "var(--dim)" }}>{t.description}</p>
-                      <code className="text-xs px-2 py-1 rounded block"
-                        style={{ background: "rgba(0,0,0,0.3)", color: "var(--muted)", fontFamily: "monospace" }}>
-                        {t.code_hint}
-                      </code>
+                      <div className="relative group">
+                        <code className="text-xs px-2 py-1 rounded block pr-14"
+                          style={{ background: "rgba(0,0,0,0.3)", color: "var(--muted)", fontFamily: "monospace" }}>
+                          {t.code_hint}
+                        </code>
+                        <div className="absolute top-0.5 right-1">
+                          <CopyButton text={t.code_hint} />
+                        </div>
+                      </div>
                     </div>
                   ))}
                 </div>
@@ -335,7 +454,12 @@ export default function ResultsPage() {
                 <p className="text-4xl mb-2">~</p>
                 <p>No notable column relationships found.</p>
               </div>
-            ) : colRels.map((r: any, i: number) => {
+            ) : colRels.filter((r: any) => r.correlation == null || Math.abs(r.correlation) >= corrThreshold).length === 0 ? (
+              <div className="text-center py-14" style={{ color: "var(--muted)" }}>
+                <p className="text-4xl mb-2">~</p>
+                <p>No relationships above |r| ≥ {corrThreshold.toFixed(2)}. Lower the threshold.</p>
+              </div>
+            ) : colRels.filter((r: any) => r.correlation == null || Math.abs(r.correlation) >= corrThreshold).map((r: any, i: number) => {
               const relColor = r.severity==='critical'?'var(--critical)':r.severity==='high'?'var(--high)':r.severity==='medium'?'var(--medium)':'var(--muted)'
               return (
                 <div key={i} className="p-4 rounded-xl border" style={{ background: "var(--surface)", borderColor: `${relColor}33` }}>
@@ -366,7 +490,10 @@ export default function ResultsPage() {
                   )}
                   <p className="text-sm leading-relaxed mb-2" style={{ color: "var(--dim)" }}>{r.explanation}</p>
                   <div className="p-2.5 rounded-lg" style={{ background: "var(--surface-2)" }}>
-                    <p className="text-xs font-semibold mb-0.5" style={{ color: "var(--teal)" }}>ACTION</p>
+                    <div className="flex items-center justify-between mb-0.5">
+                      <p className="text-xs font-semibold" style={{ color: "var(--teal)" }}>ACTION</p>
+                      <CopyButton text={r.action} />
+                    </div>
                     <p className="text-sm" style={{ color: "var(--text)" }}>{r.action}</p>
                   </div>
                 </div>

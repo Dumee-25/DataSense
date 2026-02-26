@@ -7,13 +7,14 @@ from datetime import datetime
 from typing import Optional
 
 import pandas as pd
-from fastapi import APIRouter, UploadFile, File, BackgroundTasks, HTTPException, Query, Depends, Cookie, Response
+from fastapi import APIRouter, UploadFile, File, Form, BackgroundTasks, HTTPException, Query, Depends, Cookie, Response
 from sqlalchemy.orm import Session as DBSession
 
 from database.connection import get_db
 from database import crud
 from database.models import JobStatus
-from core import StructuralAnalyzer, StatisticalEngine, ModelRecommender, InsightGenerator
+from core import (StructuralAnalyzer, StatisticalEngine, ModelRecommender,
+                  InsightGenerator, DeterministicSummary, AggregationEngine, RelevanceFilter)
 from utils.data_validator import DataValidator
 
 from fastapi.responses import StreamingResponse
@@ -50,10 +51,17 @@ def sanitize_for_json(obj):
 
 # ── Background Pipeline ───────────────────────────────────────────────────────
 
-def run_pipeline(job_id: str, file_path: str):
+def run_pipeline(job_id: str, file_path: str, user_context: str = "",
+                  explicit_target: str = ""):
     """
     Runs the full analysis pipeline in a background thread.
     Persists all results to PostgreSQL. Cleans up temp file when done.
+
+    Args:
+        job_id: Unique job identifier
+        file_path: Path to the uploaded CSV
+        user_context: Optional data dictionary / domain context from the user
+        explicit_target: Optional user-specified target column
     """
     global _active_jobs
     from database.connection import SessionLocal
@@ -107,7 +115,9 @@ def run_pipeline(job_id: str, file_path: str):
         if _is_cancelled(db, job_id): return
         crud.update_job_progress(db, job_id, 30, "Analyzing dataset structure...")
         try:
-            blueprint = StructuralAnalyzer().analyze(df)
+            blueprint = StructuralAnalyzer().analyze(
+                df, explicit_target=explicit_target or None
+            )
             logger.info(f"[{job_id}] Structural analysis complete")
         except Exception as e:
             logger.error(f"[{job_id}] Structural analysis failed: {e}", exc_info=True)
@@ -136,12 +146,21 @@ def run_pipeline(job_id: str, file_path: str):
             crud.fail_job(db, job_id, str(e), 'recommendation_error')
             return
 
+        # ── Step 5b: Build deterministic summary (LLM firewall) ─────────
+        #   The DeterministicSummary ensures the LLM only sees pre-calculated
+        #   facts — it never touches raw data or does its own math.
+        det_summary = DeterministicSummary().build(
+            blueprint, stats, recommendations, user_context=user_context or None
+        )
+        logger.info(f"[{job_id}] Deterministic summary built (LLM firewall active)")
+
         # ── Step 6: Insights (90%) ────────────────────────────────────────
         if _is_cancelled(db, job_id): return
         crud.update_job_progress(db, job_id, 90, "Generating insights...")
         try:
             insights = InsightGenerator(use_llm=USE_LLM).generate_insights(
-                blueprint, stats, recommendations
+                blueprint, stats, recommendations,
+                user_context=user_context, deterministic_summary=det_summary
             )
             logger.info(f"[{job_id}] Insights complete")
         except Exception as e:
@@ -224,12 +243,18 @@ async def upload_and_analyze(
     response: Response,
     background_tasks: BackgroundTasks,
     file: UploadFile = File(...),
+    context: Optional[str] = Form(default=None),
+    target_column: Optional[str] = Form(default=None),
     db: DBSession = Depends(get_db),
     datasense_session: Optional[str] = Cookie(default=None),
 ):
     """
     Upload a CSV file and start analysis in the background.
     Returns a job_id immediately — poll /api/status/{job_id} for progress.
+
+    Optional form fields:
+      - context: A data dictionary or domain context string injected into the LLM prompt
+      - target_column: Explicit target column name (overrides heuristic detection)
     """
     # Validate file type
     if not file.filename.lower().endswith('.csv'):
@@ -275,7 +300,11 @@ async def upload_and_analyze(
         raise HTTPException(status_code=500, detail=f"Failed to save file: {str(e)}")
 
     # Kick off background pipeline
-    background_tasks.add_task(run_pipeline, job_id, file_path)
+    background_tasks.add_task(
+        run_pipeline, job_id, file_path,
+        user_context=context or "",
+        explicit_target=target_column or ""
+    )
     logger.info(f"[{job_id}] Job created for file: {file.filename}")
 
     return {

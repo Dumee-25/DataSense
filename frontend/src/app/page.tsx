@@ -6,18 +6,21 @@ import { uploadCSV } from "@/lib/datasense-api"
 
 export default function UploadPage() {
   const router = useRouter()
-  const [dragging, setDragging] = useState(false)
-  const [busy, setBusy]         = useState(false)
-  const [error, setError]       = useState("")
+  const [dragging, setDragging]     = useState(false)
+  const [busy, setBusy]             = useState(false)
+  const [error, setError]           = useState("")
+  const [showAdvanced, setShowAdvanced] = useState(false)
+  const [context, setContext]       = useState("")
+  const [targetColumn, setTargetColumn] = useState("")
 
   const handleFile = useCallback(async (file: File) => {
     if (!file.name.endsWith(".csv")) { setError("Only CSV files are supported."); return }
     setError(""); setBusy(true)
     try {
-      const { job_id } = await uploadCSV(file)
+      const { job_id } = await uploadCSV(file, context || undefined, targetColumn || undefined)
       router.push(`/analyzing/${job_id}`)
     } catch (e: any) { setError(e.message || "Upload failed."); setBusy(false) }
-  }, [router])
+  }, [router, context, targetColumn])
 
   return (
     <div className="min-h-screen" style={{ background: "var(--bg)" }}>
@@ -91,6 +94,68 @@ export default function UploadPage() {
         </div>
 
         {error && <p className="text-sm px-4 py-2 rounded-lg fade-up" style={{ color: "var(--critical)", background: "rgba(239,68,68,0.08)" }}>{error}</p>}
+
+        {/* advanced options toggle */}
+        <button
+          onClick={() => setShowAdvanced(!showAdvanced)}
+          className="text-xs font-medium px-3 py-1.5 rounded-full transition-colors fade-up delay-3"
+          style={{ color: "var(--teal)", background: "var(--teal-dim)", border: "1px solid rgba(0,217,181,0.2)" }}>
+          {showAdvanced ? "▼" : "▶"} Data Dictionary &amp; Target
+        </button>
+
+        {/* advanced options panel */}
+        {showAdvanced && (
+          <div className="w-full max-w-lg space-y-3 fade-up">
+            <div>
+              <label className="text-xs font-semibold mb-1.5 block" style={{ color: "var(--dim)" }}>
+                Data Dictionary / Context
+                <span className="font-normal ml-1" style={{ color: "var(--muted)" }}>(optional)</span>
+              </label>
+              <textarea
+                value={context}
+                onChange={e => setContext(e.target.value)}
+                placeholder={"Describe your dataset's domain, what each column means, and any context the analysis should consider.\n\nExample: This is a clinical trials dataset. 'arm' is the treatment group (not a body part). 'endpoint_1' is the primary efficacy measure. 'site_id' identifies the hospital, not a web URL."}
+                rows={4}
+                className="w-full rounded-xl px-4 py-3 text-sm resize-none placeholder:text-sm"
+                style={{
+                  background: "var(--surface)",
+                  border: "1px solid var(--border)",
+                  color: "var(--text)",
+                  outline: "none",
+                }}
+                onFocus={e => e.target.style.borderColor = "var(--teal)"}
+                onBlur={e => e.target.style.borderColor = "var(--border)"}
+              />
+              <p className="text-xs mt-1" style={{ color: "var(--muted)" }}>
+                This context is injected into the AI prompt to ground analysis in your domain.
+              </p>
+            </div>
+            <div>
+              <label className="text-xs font-semibold mb-1.5 block" style={{ color: "var(--dim)" }}>
+                Target Column
+                <span className="font-normal ml-1" style={{ color: "var(--muted)" }}>(optional)</span>
+              </label>
+              <input
+                type="text"
+                value={targetColumn}
+                onChange={e => setTargetColumn(e.target.value)}
+                placeholder="e.g. churn, price, fraud_flag"
+                className="w-full rounded-xl px-4 py-2.5 text-sm"
+                style={{
+                  background: "var(--surface)",
+                  border: "1px solid var(--border)",
+                  color: "var(--text)",
+                  outline: "none",
+                }}
+                onFocus={e => e.target.style.borderColor = "var(--teal)"}
+                onBlur={e => e.target.style.borderColor = "var(--border)"}
+              />
+              <p className="text-xs mt-1" style={{ color: "var(--muted)" }}>
+                Override automatic target detection by specifying the column to predict.
+              </p>
+            </div>
+          </div>
+        )}
 
         {/* feature pills */}
         <div className="flex flex-wrap justify-center gap-2 fade-up delay-4">

@@ -392,6 +392,23 @@ def _rank(issues): return sorted(issues, key=lambda i: _IW.get(i.get('type', '')
 def _headline(i: dict) -> str:
     t, col = i.get('type', ''), i.get('column', '')
     cols, v1, v2 = i.get('columns', []), i.get('var1', ''), i.get('var2', '')
+
+    # Handle aggregated findings (Fix 2: Intelligent Aggregation)
+    if i.get('aggregated'):
+        count = i.get('count', 0)
+        affected = i.get('columns', [])
+        n_cols = len(affected) if isinstance(affected, list) else 0
+        _AGG_H = {
+            'high_correlation':    f'\U0001f4ca {count} correlated column pairs ({n_cols} variables)',
+            'multicollinearity':   f'\U0001f4ca {count} nearly identical column pairs ({n_cols} variables)',
+            'high_outliers':       f'\U0001f4c8 {count} columns with significant outliers',
+            'near_zero_variance':  f'\U0001f4c9 {count} columns with near-zero variance',
+            'whitespace_issues':   f'\U0001f4a1 {count} columns with whitespace issues',
+            'disguised_missing':   f'\u26a0 {count} columns with disguised null values',
+            'extreme_skewness':    f'\u26a0 {count} columns with extreme skewness (data corruption)',
+        }
+        return _AGG_H.get(t, f'{count} {t.replace("_", " ")} issues')
+
     _H = {
         'class_imbalance':    f'\u26a0 Target "{col}" is severely imbalanced',
         'data_leakage_risk':  f'\U0001f6a8 "{col}" may be leaking target information',
@@ -420,7 +437,7 @@ def _headline(i: dict) -> str:
 # ═══════════════════════════════════════════════════════════════════════════════
 class InsightGenerator:
     __slots__ = ('use_llm', 'persona', '_metrics', '_cache', '_trace', '_traces',
-                 '_provider', '_llm', '_llm_available', '_context')
+                 '_provider', '_llm', '_llm_available', '_context', '_user_context')
 
     def __init__(self, use_llm=None, persona=None, provider=None, enable_trace=None):
         self.use_llm = use_llm if use_llm is not None else USE_LLM
@@ -432,6 +449,7 @@ class InsightGenerator:
         self._llm = LLMClient(self._provider, self._cache, self._metrics, enable_trace=self._trace)
         self._llm_available = None
         self._context: Optional[DatasetContext] = None  # set at the start of generate_insights()
+        self._user_context: str = ""  # user-provided data dictionary / domain context
 
     @property
     def metrics(self): return self._metrics.to_dict()
@@ -439,8 +457,11 @@ class InsightGenerator:
     def traces(self): return list(self._traces)
 
     # ── Public API ────────────────────────────────────────────────────────
-    def generate_insights(self, blueprint: dict, stats: dict, recommendations: dict) -> Dict[str, Any]:
+    def generate_insights(self, blueprint: dict, stats: dict, recommendations: dict,
+                          user_context: str = "",
+                          deterministic_summary: dict = None) -> Dict[str, Any]:
         t0 = time.time()
+        self._user_context = user_context or ""
 
         # ── Step 0: infer dataset domain/context before any other LLM work ──
         if self.use_llm and self._check_llm():
@@ -513,6 +534,19 @@ class InsightGenerator:
                 })
             if any(i.get('source') == 'llm_semantic' for i in all_issues):
                 all_issues = _rank(all_issues)
+
+        # ── Aggregation: group identical findings to reduce document bloat ────
+        from core.aggregation_engine import AggregationEngine
+        model_name = recommendations.get('primary_model', '')
+        all_issues = AggregationEngine().aggregate(all_issues, model_name=model_name)
+
+        # ── Relevance Filter: contextualize warnings for the recommended model ──
+        from core.relevance_filter import RelevanceFilter
+        all_issues = RelevanceFilter().filter(
+            all_issues, model_name=model_name,
+            task_type=recommendations.get('task_type', 'classification')
+        )
+
         es = self._build_executive_summary(blueprint, stats, recommendations, all_issues)
         crit = [i for i in all_issues if i.get('severity') == 'critical']
         high = [i for i in all_issues if i.get('severity') == 'high']
@@ -538,10 +572,31 @@ class InsightGenerator:
 
         elapsed = round(time.time() - t0, 2)
         self._metrics.record_latency('total_insight_generation', elapsed)
-        fmt = lambda lst: [{'type': i.get('type', 'unknown'), 'severity': i.get('severity', 'medium'),
-            'headline': _headline(i), 'what_it_means': i.get('plain_english') or i.get('message', ''),
-            'business_impact': i.get('business_impact', ''), 'what_to_do': i.get('recommendation', ''),
-            'deep_dive': i.get('deep_dive', ''), 'column': i.get('column') or i.get('columns')} for i in lst]
+
+        def fmt(lst):
+            out = []
+            for i in lst:
+                entry = {
+                    'type': i.get('type', 'unknown'),
+                    'severity': i.get('severity', 'medium'),
+                    'headline': _headline(i),
+                    'what_it_means': i.get('plain_english') or i.get('message', ''),
+                    'business_impact': i.get('business_impact', ''),
+                    'what_to_do': i.get('recommendation', ''),
+                    'deep_dive': i.get('deep_dive', ''),
+                    'column': i.get('column') or i.get('columns'),
+                    # New fields for interactive features
+                    'aggregated': i.get('aggregated', False),
+                    'count': i.get('count'),
+                    'model_context_note': i.get('model_context_note', ''),
+                }
+                # Include aggregated sub-items for frontend expansion
+                if i.get('aggregated') and i.get('pairs'):
+                    entry['pairs'] = i['pairs']
+                if i.get('aggregated') and i.get('columns'):
+                    entry['affected_columns'] = i['columns']
+                out.append(entry)
+            return out
 
         result = {
             'executive_summary': es, 'data_story': data_story,
@@ -555,6 +610,7 @@ class InsightGenerator:
                 'column_meanings': self._context.column_meanings,
                 'confidence': self._context.confidence,
             } if self._context else None,
+            'user_context_provided': bool(self._user_context),
             'critical_insights': fmt(crit),
             'high_priority_insights': fmt(high), 'medium_priority_insights': fmt(med),
             'column_relationships': cr, 'class_imbalance_guidance': ig, 'model_guidance': mg,
@@ -754,10 +810,19 @@ class InsightGenerator:
     # ── Persona + Context instruction ─────────────────────────────────────
     def _persona_instruction(self) -> str:
         base = _persona_block(self.persona)
+        parts = [base]
+
+        # Inject user-provided data dictionary / domain context (Fix 3)
+        if self._user_context:
+            parts.append(
+                f"\nUSER-PROVIDED DATA DICTIONARY (treat as ground truth for domain and column meanings):\n"
+                f"{self._user_context[:2000]}"  # cap to prevent prompt explosion
+            )
+
         if self._context and self._context.is_useful():
             ctx = self._context.summary()
-            return f"{base}\n\nDATASET CONTEXT (use this to make insights specific, not generic):\n{ctx}"
-        return base
+            parts.append(f"\nDATASET CONTEXT (use this to make insights specific, not generic):\n{ctx}")
+        return "\n".join(parts)
 
     # ── LLM Task 0: Domain Context Inference ─────────────────────────────
     def _llm_infer_context(self, bp: dict, stats: dict, recs: dict) -> DatasetContext:
@@ -782,6 +847,15 @@ class InsightGenerator:
             ", ".join(str(v) for v in p.get('sample_values', [])[:2])
             for p in bp.get('column_profiles', [])[:15]
         )
+
+        # Include user-provided data dictionary if available (Fix 3: Dynamic Context Injection)
+        user_ctx_block = ""
+        if self._user_context:
+            user_ctx_block = (
+                f"\n\nUSER-PROVIDED DATA DICTIONARY (treat as authoritative ground truth):\n"
+                f"{self._user_context[:1500]}\n"
+            )
+
         prompt = f"""Classify this dataset for ML. Respond ONLY with valid JSON.
 
 Shape: {b.get('rows',0):,} rows × {b.get('columns',0)} cols
@@ -789,7 +863,7 @@ Target: {', '.join(f'"{c}"' for c in target_candidates) or 'unknown'}
 Task: {recs.get('task_type', 'unknown')}
 
 Columns (name [dtype]: sample values):
-{col_snapshot}
+{col_snapshot}{user_ctx_block}
 
 JSON schema (return ONLY this, no other text):
 {{
