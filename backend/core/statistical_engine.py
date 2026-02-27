@@ -59,9 +59,15 @@ class StatisticalEngine:
             logger.info(f"StatisticalEngine: downsampled {len(df_clean):,} → "
                         f"{_SAMPLE_MAX_ROWS:,} rows for correlation/Simpson's checks")
 
-        nc   = df_clean.select_dtypes(include=[np.number]).columns.tolist()
+        # ── Exclude identifier columns from statistical analysis ────────────────
+        # ID columns (e.g. "customer_id", "order_key") are unique identifiers that
+        # produce meaningless correlations, inflated outlier counts, and misleading
+        # distribution statistics.  The StructuralAnalyzer already tags them.
+        id_cols = set(blueprint.get('data_structure', {}).get('id_columns', []))
+
+        nc   = [c for c in df_clean.select_dtypes(include=[np.number]).columns if c not in id_cols]
         cc   = df_clean.select_dtypes(include=['object', 'category']).columns.tolist()
-        nc_s = df_sample.select_dtypes(include=[np.number]).columns.tolist()
+        nc_s = [c for c in df_sample.select_dtypes(include=[np.number]).columns if c not in id_cols]
         cc_s = df_sample.select_dtypes(include=['object', 'category']).columns.tolist()
         return {
             'red_flags': self._find_red_flags(df_clean, df_sample, blueprint, nc, cc, nc_s, cc_s),
