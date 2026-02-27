@@ -14,11 +14,13 @@ from database.connection import get_db
 from database import crud
 from database.models import JobStatus
 from core import (StructuralAnalyzer, StatisticalEngine, ModelRecommender,
-                  InsightGenerator, DeterministicSummary, AggregationEngine, RelevanceFilter)
+                  InsightGenerator, DeterministicSummary, AggregationEngine, RelevanceFilter,
+                  ChartEngine)
 from utils.data_validator import DataValidator
 
 from fastapi.responses import StreamingResponse
 import io
+import base64
 from core.pdf_generator import PDFReportGenerator
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -519,3 +521,47 @@ def export_pdf(job_id: str, db: DBSession = Depends(get_db)):
         media_type="application/pdf",
         headers={"Content-Disposition": f"attachment; filename={filename}"}
     )
+
+
+@router.get("/results/{job_id}/charts")
+def get_charts(job_id: str, db: DBSession = Depends(get_db)):
+    """
+    Generate analysis charts for a completed job.
+    Returns a dict of chart_name → base64-encoded PNG string (or null if skipped).
+    """
+    job = crud.get_job(db, job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found.")
+
+    if job.status != JobStatus.completed:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Job is not complete yet. Status: {job.status.value}"
+        )
+
+    result = crud.get_result(db, job_id)
+    if not result:
+        raise HTTPException(status_code=404, detail="Results not found.")
+
+    results_payload = {
+        "results": {
+            "dataset_info": result.dataset_info,
+            "structural_analysis": result.structural_analysis,
+            "statistical_analysis": result.statistical_analysis,
+            "model_recommendations": result.model_recommendations,
+            "insights": result.insights,
+        }
+    }
+
+    try:
+        raw_charts = ChartEngine().generate_all(results_payload)
+        encoded = {}
+        for name, png_bytes in raw_charts.items():
+            if png_bytes is not None:
+                encoded[name] = base64.b64encode(png_bytes).decode("ascii")
+            else:
+                encoded[name] = None
+        return {"job_id": job_id, "charts": encoded}
+    except Exception as e:
+        logger.error(f"Chart generation failed for job {job_id}: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Chart generation failed: {str(e)}")

@@ -33,6 +33,7 @@ export interface Insight {
   business_impact?: string; deep_dive?: string
   aggregated?: boolean; count?: number
   model_context_note?: string
+  action_priority?: "must-fix" | "should-fix" | "nice-to-have" | "informational" | ""
   pairs?: { var1: string; var2: string; correlation: number }[]
   affected_columns?: string[]
 }
@@ -65,6 +66,17 @@ export interface ModelGuide {
   before_you_train: string[]; how_to_validate: string; how_to_measure_success: string[]
 }
 
+export interface DomainContext {
+  domain: string; purpose: string; target_meaning: string
+  key_risks: string[]; leakage_suspects: string[]; metadata_cols: string[]
+  column_meanings: Record<string, string>; confidence: number
+}
+
+export interface ChartData {
+  job_id: string
+  charts: Record<string, string | null>  // chart_name → base64 PNG or null
+}
+
 export interface FullResults {
   job_id: string; filename: string
   completed_at: string; processing_time_seconds: number
@@ -73,6 +85,9 @@ export interface FullResults {
     statistical_analysis: any; model_recommendations: any
     insights: {
       executive_summary: string
+      data_story?: string
+      domain_context?: DomainContext | null
+      user_context_provided?: boolean
       critical_insights: Insight[]; high_priority_insights: Insight[]; medium_priority_insights: Insight[]
       column_relationships: ColumnRelationship[]
       class_imbalance_guidance: ClassImbalanceGuidance | null
@@ -105,6 +120,7 @@ export const cancelAnalysis  = (id: string) => call(`/cancel/${id}`, { method: "
 export const fetchHistory    = (): Promise<{ total: number; jobs: HistoryJob[] }> => call("/jobs").then(r => r.json()).catch(() => ({ total: 0, jobs: [] }))
 export const removeJob       = (id: string) => call(`/jobs/${id}`, { method: "DELETE" })
 export const pdfDownloadUrl  = (id: string) => `${BASE}/results/${id}/export/pdf`
+export const fetchCharts    = (id: string): Promise<ChartData> => call(`/results/${id}/charts`).then(r => r.json()).catch(() => ({ job_id: id, charts: {} }))
 
 export const fetchCurrentUser = (): Promise<{ user: AuthUser | null; authenticated: boolean }> =>
   call("/auth/me").then(r => r.json()).catch(() => ({ user: null, authenticated: false }))

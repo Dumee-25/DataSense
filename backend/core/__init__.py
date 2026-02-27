@@ -6,6 +6,7 @@ from core.pdf_generator import PDFReportGenerator
 from core.deterministic_summary import DeterministicSummary
 from core.aggregation_engine import AggregationEngine
 from core.relevance_filter import RelevanceFilter
+from core.chart_engine import ChartEngine
 
 __all__ = [
     "StructuralAnalyzer",
@@ -16,4 +17,5 @@ __all__ = [
     "DeterministicSummary",
     "AggregationEngine",
     "RelevanceFilter",
+    "ChartEngine",
 ]

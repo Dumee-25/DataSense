@@ -589,6 +589,7 @@ class InsightGenerator:
                     'aggregated': i.get('aggregated', False),
                     'count': i.get('count'),
                     'model_context_note': i.get('model_context_note', ''),
+                    'action_priority': i.get('action_priority', ''),
                 }
                 # Include aggregated sub-items for frontend expansion
                 if i.get('aggregated') and i.get('pairs'):
@@ -831,22 +832,68 @@ class InsightGenerator:
         Prompt design choices:
         - NO persona block: this is a classification task, not a user-facing response.
           The persona instructions add ~150 tokens of overhead with zero benefit here.
-        - Columns capped at 15, sample values at 2: enough for domain inference; more
-          just inflates the prompt and generation time.
-        - max_tokens=350: a compact JSON object with 15 column meanings + 7 other fields
-          fits comfortably in 350 tokens.
+        - Target detail block first: the actual class labels (e.g. "setosa, versicolor,
+          virginica") are extracted from top_values and placed prominently before the
+          column snapshot.  Without real class labels the LLM is forced to hallucinate
+          the target_meaning (the root cause of bugs like "whether a flower will bloom").
+        - Columns capped at 20 × 5 samples: enough for domain inference.  Categorical
+          columns use top_values keys (deduplicated category labels) instead of raw
+          sample_values, which are both more informative and more compact.
+        - max_tokens=550 (raised from 350): the richer target detail + larger snapshot
+          legitimately require more output space.  Truncated responses silently force the
+          LLM to skip fields and hallucinate fill-ins for anything left unwritten.
         - Uses LLM_CONTEXT_TIMEOUT (≥60s by default) instead of LLM_TIMEOUT (default 30s)
           because this task generates more tokens than a typical single-field call.
         """
         b = bp.get('basic_info', {})
-        cols = [p['name'] for p in bp.get('column_profiles', [])]
-        target_candidates = [t['column'] for t in bp.get('target_candidates', [])[:2]]
-        # Compact snapshot: at most 15 columns × 2 sample values each
-        col_snapshot = "\n".join(
-            f'  "{p["name"]}" [{p.get("dtype","?")}]: ' +
-            ", ".join(str(v) for v in p.get('sample_values', [])[:2])
-            for p in bp.get('column_profiles', [])[:15]
-        )
+        profiles = bp.get('column_profiles', [])
+        target_candidates = bp.get('target_candidates', [])
+        target_cols = [t['column'] for t in target_candidates[:2]]
+
+        # Build a map of column name → profile for quick lookup
+        profile_map = {p['name']: p for p in profiles}
+
+        # ── Column snapshot: up to 20 cols × 5 sample values ─────────────────
+        # More samples give the LLM enough signal to recognise well-known datasets
+        # (e.g. seeing "setosa, versicolor, virginica" immediately identifies Iris).
+        col_snapshot_lines = []
+        for p in profiles[:20]:
+            name = p['name']
+            dtype = p.get('dtype', '?')
+            samples = [str(v) for v in p.get('sample_values', [])[:5]]
+            # For categorical columns, prefer top_values keys (the actual category labels)
+            # over raw sample_values — they are deduplicated and more informative.
+            if p.get('top_values') and p.get('kind') in ('categorical', 'numeric_categorical'):
+                samples = [str(k) for k in list(p['top_values'].keys())[:5]]
+            col_snapshot_lines.append(
+                f'  "{name}" [{dtype}]: {", ".join(samples) if samples else "no samples"}'
+            )
+        col_snapshot = "\n".join(col_snapshot_lines)
+
+        # ── Target column detail block ────────────────────────────────────────
+        # This is the single most important piece of context for accurate target_meaning.
+        # Without the actual class labels the LLM is forced to hallucinate.
+        target_detail_lines = []
+        for t in target_candidates[:2]:
+            col = t['column']
+            p = profile_map.get(col, {})
+            task_type = t.get('task_type', recs.get('task_type', 'unknown'))
+            n_classes = t.get('n_classes')
+            top_vals = p.get('top_values', {})
+            if top_vals:
+                class_list = ", ".join(
+                    f'"{k}" ({v} rows)' for k, v in list(top_vals.items())[:10]
+                )
+                target_detail_lines.append(
+                    f'  "{col}" [{task_type}] — {n_classes} classes: {class_list}'
+                )
+            else:
+                imbalance = t.get('imbalance_ratio')
+                target_detail_lines.append(
+                    f'  "{col}" [{task_type}] — {n_classes or "?"} classes'
+                    + (f', imbalance ratio {imbalance:.1f}x' if imbalance else '')
+                )
+        target_detail = "\n".join(target_detail_lines) or "  unknown"
 
         # Include user-provided data dictionary if available (Fix 3: Dynamic Context Injection)
         user_ctx_block = ""
@@ -859,24 +906,29 @@ class InsightGenerator:
         prompt = f"""Classify this dataset for ML. Respond ONLY with valid JSON.
 
 Shape: {b.get('rows',0):,} rows × {b.get('columns',0)} cols
-Target: {', '.join(f'"{c}"' for c in target_candidates) or 'unknown'}
 Task: {recs.get('task_type', 'unknown')}
 
-Columns (name [dtype]: sample values):
+TARGET COLUMN(S) — use the actual class labels below to write an accurate target_meaning:
+{target_detail}
+
+All columns (name [dtype]: sample/category values):
 {col_snapshot}{user_ctx_block}
 
 JSON schema (return ONLY this, no other text):
 {{
   "domain": "one of: healthcare|finance|e-commerce|telecom|hr|logistics|marketing|real-estate|education|manufacturing|social-media|sports|government|other",
-  "purpose": "one sentence: what ML task this dataset is for",
-  "target_meaning": "plain English: what predicting the target means in real life",
+  "purpose": "one sentence: what ML task this dataset is for, referencing the actual target classes",
+  "target_meaning": "plain English: what predicting the target means — name the actual classes/values, do NOT invent meanings",
   "column_meanings": {{"col": "brief meaning", ...}},
   "key_risks": ["up to 3 domain-specific data quality risks"],
   "leakage_suspects": ["cols with POST-EVENT data unavailable at prediction time — [] if none"],
   "metadata_cols": ["cols that are collection artefacts: batch IDs, machine codes, run numbers, operator IDs, ETL timestamps — [] if none"],
   "confidence": 0.0
 }}"""
-        raw = self._llm.call_json(prompt, max_tokens=350, timeout=LLM_CONTEXT_TIMEOUT,
+        # max_tokens raised from 350 → 550: the richer column snapshot + longer class lists
+        # mean the JSON response legitimately needs more space.  Truncated responses were
+        # forcing the LLM to hallucinate fill-ins for fields it never got to write.
+        raw = self._llm.call_json(prompt, max_tokens=550, timeout=LLM_CONTEXT_TIMEOUT,
                                   task_name='context_inference')
         if not raw or not isinstance(raw, dict):
             logger.info("Context inference returned nothing — proceeding without domain context")

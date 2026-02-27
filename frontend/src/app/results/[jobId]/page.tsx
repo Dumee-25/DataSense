@@ -2,14 +2,32 @@
 import { useEffect, useState } from "react"
 import { useParams, useRouter } from "next/navigation"
 import NavBar from "@/components/NavBar"
-import { fetchResults, pdfDownloadUrl, FullResults, Insight } from "@/lib/datasense-api"
+import { fetchResults, fetchCharts, pdfDownloadUrl, FullResults, Insight, ChartData, DomainContext } from "@/lib/datasense-api"
 
-type Tab = "summary" | "findings" | "relations" | "model" | "columns"
+type Tab = "summary" | "findings" | "charts" | "relations" | "model" | "columns"
 
 const SEV = {
   critical: { color: "var(--critical)", bg: "rgba(239,68,68,0.08)" },
   high:     { color: "var(--high)",     bg: "rgba(249,115,22,0.08)" },
   medium:   { color: "var(--medium)",   bg: "rgba(234,179,8,0.08)"  },
+}
+
+const PRIO = {
+  "must-fix":      { label: "MUST FIX", color: "#EF4444", bg: "rgba(239,68,68,0.12)" },
+  "should-fix":    { label: "SHOULD FIX", color: "#F97316", bg: "rgba(249,115,22,0.10)" },
+  "nice-to-have":  { label: "NICE TO HAVE", color: "#EAB308", bg: "rgba(234,179,8,0.10)" },
+  "informational": { label: "INFO", color: "#64748B", bg: "rgba(100,116,139,0.10)" },
+}
+
+function PrioBadge({ priority }: { priority?: string }) {
+  if (!priority || !(priority in PRIO)) return null
+  const p = PRIO[priority as keyof typeof PRIO]
+  return (
+    <span className="px-2 py-0.5 rounded text-[10px] font-bold tracking-wide flex-shrink-0"
+      style={{ background: p.bg, color: p.color }}>
+      {p.label}
+    </span>
+  )
 }
 
 function Badge({ sev }: { sev: string }) {
@@ -54,7 +72,7 @@ function FindingCard({ item }: { item: Insight }) {
         onClick={() => setOpen(!open)}>
         <Badge sev={item.severity} />
         <div className="flex-1">
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-2 flex-wrap">
             <p className="text-sm font-medium" style={{ color: "var(--text)" }}>{item.headline}</p>
             {item.aggregated && item.count && (
               <span className="px-1.5 py-0.5 rounded text-xs font-mono"
@@ -62,6 +80,7 @@ function FindingCard({ item }: { item: Insight }) {
                 ×{item.count}
               </span>
             )}
+            <PrioBadge priority={item.action_priority} />
           </div>
           {col && (
             <p className="text-xs font-mono mt-0.5" style={{ color: "var(--muted)" }}>{col}</p>
@@ -198,10 +217,20 @@ export default function ResultsPage() {
   const [tab, setTab]         = useState<Tab>("summary")
   const [sevFilter, setSevFilter] = useState<Record<string,boolean>>({ critical: true, high: true, medium: true })
   const [corrThreshold, setCorrThreshold] = useState(0.0)
+  const [charts, setCharts]   = useState<Record<string, string | null>>({})
+  const [chartsLoading, setChartsLoading] = useState(false)
 
   useEffect(() => {
     fetchResults(jobId).then(r => { setData(r); setLoading(false) }).catch(() => router.push("/"))
   }, [jobId, router])
+
+  // Lazy-load charts when the tab is first selected
+  useEffect(() => {
+    if (tab === "charts" && Object.keys(charts).length === 0 && !chartsLoading) {
+      setChartsLoading(true)
+      fetchCharts(jobId).then(r => setCharts(r.charts || {})).finally(() => setChartsLoading(false))
+    }
+  }, [tab, jobId, charts, chartsLoading])
 
   if (loading) return (
     <div className="min-h-screen flex items-center justify-center" style={{ background: "var(--bg)" }}>
@@ -221,10 +250,13 @@ export default function ResultsPage() {
   const imbalance   = ins?.class_imbalance_guidance || null
   const totalIssues = (bd.critical||0)+(bd.high||0)+(bd.medium||0)
   const llmEnhanced = ins?.llm_enhanced ?? false
+  const dataStory   = ins?.data_story || ""
+  const domainCtx   = ins?.domain_context || null
 
   const TABS: { id: Tab; label: string }[] = [
     { id: "summary",   label: "Summary" },
     { id: "findings",  label: `Findings (${totalIssues})` },
+    { id: "charts",    label: "Charts" },
     { id: "relations", label: `Relations (${colRels.length})` },
     { id: "model",     label: "Model" },
     { id: "columns",   label: `Columns (${basic.columns||0})` },
@@ -321,6 +353,96 @@ export default function ResultsPage() {
         {/* ══ SUMMARY ══ */}
         {tab === "summary" && (
           <div className="space-y-4 fade-up">
+
+            {/* Data Story — AI narrative */}
+            {dataStory && (
+              <div className="p-5 rounded-2xl" style={{ background: "var(--surface)", border: "1px solid rgba(139,92,246,0.2)" }}>
+                <div className="flex items-center gap-2 mb-2">
+                  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="rgb(167,139,250)"
+                    strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M12 2L15.09 8.26L22 9.27L17 14.14L18.18 21.02L12 17.77L5.82 21.02L7 14.14L2 9.27L8.91 8.26L12 2Z"/>
+                  </svg>
+                  <p className="text-xs font-semibold" style={{ color: "rgb(167,139,250)", fontFamily: "Syne, sans-serif" }}>
+                    DATA STORY
+                  </p>
+                  <span className="text-xs px-1.5 py-0.5 rounded"
+                    style={{ background: "rgba(139,92,246,0.1)", color: "rgb(167,139,250)" }}>AI</span>
+                </div>
+                <p className="text-sm leading-relaxed" style={{ color: "var(--dim)" }}>{dataStory}</p>
+              </div>
+            )}
+
+            {/* Domain Context — LLM-inferred */}
+            {domainCtx && domainCtx.domain !== "unknown" && domainCtx.confidence >= 0.4 && (
+              <div className="p-5 rounded-2xl" style={{ background: "var(--surface)", border: "1px solid var(--border)" }}>
+                <div className="flex items-center gap-2 mb-3">
+                  <p className="text-xs font-semibold" style={{ color: "var(--teal)", fontFamily: "Syne, sans-serif" }}>
+                    DETECTED CONTEXT
+                  </p>
+                  <span className="text-xs px-1.5 py-0.5 rounded"
+                    style={{ background: "rgba(139,92,246,0.1)", color: "rgb(167,139,250)" }}>AI</span>
+                  <span className="text-xs font-mono" style={{ color: "var(--muted)" }}>
+                    {Math.round(domainCtx.confidence * 100)}% confidence
+                  </span>
+                </div>
+                <div className="grid grid-cols-2 gap-x-6 gap-y-2 text-sm mb-3">
+                  <div>
+                    <span className="text-xs" style={{ color: "var(--muted)" }}>Domain: </span>
+                    <span style={{ color: "var(--text)" }}>{domainCtx.domain}</span>
+                  </div>
+                  {domainCtx.purpose && (
+                    <div>
+                      <span className="text-xs" style={{ color: "var(--muted)" }}>Purpose: </span>
+                      <span style={{ color: "var(--text)" }}>{domainCtx.purpose}</span>
+                    </div>
+                  )}
+                  {domainCtx.target_meaning && (
+                    <div className="col-span-2">
+                      <span className="text-xs" style={{ color: "var(--muted)" }}>Target: </span>
+                      <span style={{ color: "var(--text)" }}>{domainCtx.target_meaning}</span>
+                    </div>
+                  )}
+                </div>
+                {domainCtx.key_risks?.length > 0 && (
+                  <div className="mb-2">
+                    <p className="text-xs mb-1" style={{ color: "var(--muted)" }}>Domain risks:</p>
+                    <div className="flex flex-wrap gap-1.5">
+                      {domainCtx.key_risks.map((r, i) => (
+                        <span key={i} className="px-2 py-0.5 rounded text-xs"
+                          style={{ background: "rgba(239,68,68,0.08)", color: "var(--high)" }}>{r}</span>
+                      ))}
+                    </div>
+                  </div>
+                )}
+                {domainCtx.leakage_suspects?.length > 0 && (
+                  <div className="mb-2">
+                    <p className="text-xs mb-1" style={{ color: "var(--muted)" }}>Leakage suspects:</p>
+                    <div className="flex flex-wrap gap-1.5">
+                      {domainCtx.leakage_suspects.map((c, i) => (
+                        <span key={i} className="px-2 py-0.5 rounded text-xs font-mono"
+                          style={{ background: "rgba(239,68,68,0.08)", color: "var(--critical)" }}>{c}</span>
+                      ))}
+                    </div>
+                  </div>
+                )}
+                {Object.keys(domainCtx.column_meanings || {}).length > 0 && (
+                  <details className="mt-2">
+                    <summary className="text-xs cursor-pointer" style={{ color: "var(--muted)" }}>
+                      Column meanings ({Object.keys(domainCtx.column_meanings).length} columns)
+                    </summary>
+                    <div className="mt-2 space-y-1 max-h-40 overflow-y-auto">
+                      {Object.entries(domainCtx.column_meanings).map(([col, meaning]) => (
+                        <div key={col} className="flex gap-2 text-xs">
+                          <span className="font-mono flex-shrink-0" style={{ color: "var(--teal)" }}>{col}</span>
+                          <span style={{ color: "var(--dim)" }}>{meaning}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </details>
+                )}
+              </div>
+            )}
+
             {ins?.quick_wins?.length > 0 && (
               <div className="p-5 rounded-2xl" style={{ background: "var(--surface)", border: "1px solid var(--border)" }}>
                 <p className="text-xs font-semibold mb-3" style={{ color: "var(--teal)", fontFamily: "Syne, sans-serif" }}>
@@ -386,6 +508,58 @@ export default function ResultsPage() {
             </div>
           )
         })()}
+
+        {/* ══ CHARTS ══ */}
+        {tab === "charts" && (
+          <div className="space-y-4 fade-up">
+            {chartsLoading ? (
+              <div className="text-center py-14">
+                <div className="w-8 h-8 rounded-full border-2 animate-spin mx-auto mb-3"
+                  style={{ borderColor: "var(--teal)", borderTopColor: "transparent" }} />
+                <p className="text-sm" style={{ color: "var(--muted)" }}>Generating charts…</p>
+              </div>
+            ) : Object.values(charts).every(v => v === null) || Object.keys(charts).length === 0 ? (
+              <div className="text-center py-14" style={{ color: "var(--muted)" }}>
+                <p className="text-4xl mb-2">📊</p>
+                <p>No charts available. Charts require matplotlib on the server.</p>
+              </div>
+            ) : (
+              <>
+                {[
+                  { key: "data_health_radar", label: "Data Health Radar" },
+                  { key: "missing_values",    label: "Missing Values" },
+                  { key: "correlation",       label: "Correlations" },
+                  { key: "target_distribution", label: "Target Distribution" },
+                  { key: "outliers",          label: "Outlier Severity" },
+                  { key: "skewness",          label: "Distribution Skewness" },
+                ].map(({ key, label }) => {
+                  const b64 = charts[key]
+                  if (!b64) return null
+                  return (
+                    <div key={key} className="rounded-2xl overflow-hidden"
+                      style={{ background: "var(--surface)", border: "1px solid var(--border)" }}>
+                      <div className="px-5 py-3 flex items-center justify-between"
+                        style={{ borderBottom: "1px solid var(--border)" }}>
+                        <p className="text-xs font-semibold" style={{ color: "var(--teal)", fontFamily: "Syne, sans-serif" }}>
+                          {label.toUpperCase()}
+                        </p>
+                        <a href={`data:image/png;base64,${b64}`} download={`${key}.png`}
+                          className="px-2 py-0.5 rounded text-xs transition-colors"
+                          style={{ background: "var(--surface-2)", color: "var(--muted)" }}>
+                          ↓ PNG
+                        </a>
+                      </div>
+                      <div className="p-4 flex justify-center" style={{ background: "#FAFAFA" }}>
+                        <img src={`data:image/png;base64,${b64}`} alt={label}
+                          className="max-w-full h-auto rounded" style={{ maxHeight: 420 }} />
+                      </div>
+                    </div>
+                  )
+                })}
+              </>
+            )}
+          </div>
+        )}
 
         {/* ══ RELATIONS ══ */}
         {tab === "relations" && (
