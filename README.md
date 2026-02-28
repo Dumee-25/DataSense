@@ -62,9 +62,21 @@ The entire analysis runs as a 7-step background pipeline with real-time progress
 - **Prompt caching** — SHA-256 keyed cache to avoid redundant LLM calls
 - **Graceful degradation** — halves token budget after consecutive timeouts; falls back to rule-based insights if LLM is unavailable
 
+### Charts & Visualization
+- **6 auto-generated chart types** — produced from pre-computed results (no raw data re-read), with adaptive rendering for wide datasets
+  - **Data Health Radar** — spider chart scoring completeness, consistency, outlier severity, skewness, and target quality
+  - **Missing Values** — horizontal bar chart of per-column missing percentages
+  - **Correlation** — heatmap for narrow datasets (≤14 columns) or ranked-pairs bar chart for wider ones
+  - **Target Distribution** — class balance bar chart (classification) or histogram with stats overlay (regression)
+  - **Outlier Severity** — grouped bar chart of IQR-based outlier counts per column
+  - **Skewness** — bar chart of skewness values with symmetry band and severity coloring
+- **Self-skipping** — charts return `None` when data is absent or trivial, so the frontend and PDF skip them automatically
+- **PNG output** — rendered at 130 DPI via Matplotlib (Agg backend); served as base64 for the frontend or embedded directly into PDF reports
+- **Individual download** — each chart has a PNG download button in the frontend
+
 ### Platform
 - **Real-time progress** — 7-step pipeline with live percentage updates and step checklist
-- **PDF report export** — professionally designed reports with cover page, severity-coded findings, model recommendations, column profiles, and custom icon illustrations
+- **PDF report export** — professionally designed reports with cover page, severity-coded findings, model recommendations, column profiles, charts, and custom icon illustrations
 - **History** — browse past analyses with metadata (rows, columns, issues, primary model)
 - **Authentication** — optional accounts with seamless anonymous-to-authenticated transition (existing analysis history is preserved on sign-up/login)
 - **Session-based tracking** — anonymous users get a browser session cookie; analyses are tied to sessions and optionally linked to accounts
@@ -117,6 +129,7 @@ The entire analysis runs as a 7-step background pipeline with real-time progress
 | **Database** | PostgreSQL (UUID primary keys, JSONB for analysis results) |
 | **AI / LLM** | Ollama (local), OpenAI, or Groq — configurable          |
 | **Analysis** | Pandas 2.2, SciPy 1.13, scikit-learn 1.5               |
+| **Charts**   | Matplotlib 3.10 (Agg backend, PNG output at 130 DPI)    |
 | **PDF**      | ReportLab 4.2                                           |
 | **Auth**     | JWT (python-jose) + bcrypt (passlib), httponly cookies   |
 
@@ -235,12 +248,13 @@ If no LLM provider is available, DataSense falls back gracefully to rule-based i
 
 1. **Upload** — Drag and drop a CSV file (up to 50 MB) on the home page.
 2. **Analyze** — Watch the 7-step pipeline process your data in real time.
-3. **Explore results** — Browse findings across five tabs:
-   - **Summary** — executive overview, quick wins, severity breakdown
-   - **Findings** — expandable cards with severity, business impact, and AI deep dives
-   - **Relations** — column correlations, Simpson's paradox, class imbalance guidance
-   - **Model** — recommended ML model with confidence, alternatives, and preprocessing steps
-   - **Columns** — detailed profile of every column
+3. **Explore results** — Browse findings across six tabs:
+   - **Summary** — executive overview, data story, domain context, quick wins, severity breakdown
+   - **Findings** — expandable cards with severity, action priority, business impact, model context, and AI deep dives
+   - **Charts** — data health radar, missing values, correlations, target distribution, outliers, skewness (with PNG download)
+   - **Relations** — column correlations, Simpson's paradox, class imbalance guidance with code hints
+   - **Model** — recommended ML model with confidence, alternatives, preprocessing steps, and validation strategy
+   - **Columns** — detailed profile of every column (type, missing %, unique count, notes)
 4. **Export** — Download a professionally formatted PDF report.
 5. **History** — Revisit past analyses from the History page. Sign in to preserve history across devices.
 
@@ -260,6 +274,7 @@ If no LLM provider is available, DataSense falls back gracefully to rule-based i
 | `DELETE` | `/api/jobs/{job_id}`              | Delete a specific job and results    |
 | `DELETE` | `/api/jobs`                       | Cleanup expired jobs                 |
 | `GET`    | `/api/results/{job_id}/export/pdf`| Download PDF report                  |
+| `GET`    | `/api/results/{job_id}/charts`    | Fetch base64-encoded chart PNGs      |
 
 ### Authentication
 
@@ -288,6 +303,10 @@ datasense/
 │   │   ├── statistical_engine.py    # Correlations, outliers, distributions, red flags
 │   │   ├── model_recommender.py     # ML model scoring & recommendations
 │   │   ├── insight_generator.py     # LLM-enhanced insight engine
+│   │   ├── deterministic_summary.py # LLM-safe digest builder (no raw data to LLM)
+│   │   ├── aggregation_engine.py    # Groups duplicate/similar findings
+│   │   ├── relevance_filter.py      # Contextualizes findings for recommended model
+│   │   ├── chart_engine.py          # Matplotlib chart generation (6 chart types)
 │   │   └── pdf_generator.py         # ReportLab PDF report generation
 │   ├── database/
 │   │   ├── connection.py        # SQLAlchemy engine & session
@@ -308,7 +327,7 @@ datasense/
 │   │   │   ├── layout.tsx           # Root layout
 │   │   │   ├── globals.css          # Global styles
 │   │   │   ├── analyzing/[jobId]/   # Real-time progress page
-│   │   │   ├── results/[jobId]/     # Results dashboard (5 tabs)
+│   │   │   ├── results/[jobId]/     # Results dashboard (6 tabs)
 │   │   │   └── history/             # Analysis history
 │   │   ├── components/
 │   │   │   ├── NavBar.tsx           # Top navigation bar
