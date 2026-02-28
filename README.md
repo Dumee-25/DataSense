@@ -211,8 +211,8 @@ SECRET_KEY=your-secret-key-here
 # LLM Provider: "ollama" (default), "openai", or "groq"
 LLM_PROVIDER=ollama
 
-# Ollama (local) — default
-OLLAMA_URL=http://localhost:11434
+# Ollama (local) — default (must include /api/generate)
+OLLAMA_URL=http://localhost:11434/api/generate
 
 # OpenAI (optional)
 OPENAI_API_KEY=sk-...
@@ -222,7 +222,7 @@ GROQ_API_KEY=gsk_...
 
 # LLM Tuning
 LLM_TIMEOUT=30
-LLM_MAX_WORKERS=3
+LLM_MAX_WORKERS=2
 TOKEN_BUDGET=4096
 
 # Insight persona: "general" (default), "executive", "data_scientist", "product_manager"
