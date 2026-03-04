@@ -801,6 +801,14 @@ class PDFReportGenerator:
                 'outliers':            'Outlier Severity',
                 'skewness':            'Distribution Skewness',
                 'data_health_radar':   'Data Health Overview',
+                'column_types':        'Column Types',
+                'duplicates':          'Duplicate Rows',
+                'cardinality':         'Cardinality',
+                'feature_importance':  'Feature Importance',
+                'missing_pattern':     'Missing Data Pattern',
+                'box_plots':           'Box Plots',
+                'pca_variance':        'PCA Variance',
+                'cluster_preview':     'Cluster Preview',
             }.get(key, key.replace('_', ' ').title())
 
         def _chart_caption(key: str) -> str:
@@ -811,6 +819,14 @@ class PDFReportGenerator:
                 'outliers':            'Share of rows with extreme values per column (IQR method).',
                 'skewness':            'How far each column\'s distribution deviates from symmetry.',
                 'data_health_radar':   'Six-dimension data quality score — higher is healthier.',
+                'column_types':        'Breakdown of column data types in the dataset.',
+                'duplicates':          'Proportion of unique vs duplicate rows.',
+                'cardinality':         'Number of unique values per column — high values may indicate IDs.',
+                'feature_importance':  'Estimated feature importance based on correlation with the target.',
+                'missing_pattern':     'Overview of which columns have missing data and how much.',
+                'box_plots':           'Spread and outliers for the top numeric columns.',
+                'pca_variance':        'How much variance each principal component explains.',
+                'cluster_preview':     'Data projected onto first two principal components, coloured by cluster.',
             }.get(key, '')
 
         def _png_to_image(png_bytes: bytes, max_width: float) -> Image:
@@ -850,6 +866,14 @@ class PDFReportGenerator:
             'correlation',
             'outliers',
             'skewness',
+            'column_types',
+            'duplicates',
+            'cardinality',
+            'feature_importance',
+            'missing_pattern',
+            'box_plots',
+            'pca_variance',
+            'cluster_preview',
         ]
 
         # Radar pairs with the first available companion for a side-by-side layout

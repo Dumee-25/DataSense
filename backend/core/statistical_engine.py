@@ -77,6 +77,8 @@ class StatisticalEngine:
             'outlier_summary': self._outlier_summary(df_clean, nc),
             'distribution_summary': self._distribution_summary(df_clean, nc),
             'sentinel_scrub': scrub_log,   # audit trail of what was replaced
+            'pca_summary': self._pca_summary(df_sample, nc_s),
+            'cluster_preview': self._cluster_preview(df_sample, nc_s),
         }
 
     def _scrub_sentinels(self, df: pd.DataFrame, blueprint: dict):
@@ -363,3 +365,78 @@ class StatisticalEngine:
             out.append({'column': col, 'skewness': round(sk, 3), 'kurtosis': round(float(s.kurt()), 3),
                 'shape': shape})
         return out
+
+    # ── PCA summary ───────────────────────────────────────────────────────
+    def _pca_summary(self, df: pd.DataFrame, nc: list) -> dict | None:
+        """Return explained-variance ratios for up to 10 principal components."""
+        if len(nc) < 3:
+            return None
+        try:
+            from sklearn.decomposition import PCA
+            from sklearn.preprocessing import StandardScaler
+            sub = df[nc].dropna()
+            if len(sub) < 30:
+                return None
+            X = StandardScaler().fit_transform(sub)
+            n_comp = min(10, len(nc), len(sub))
+            pca = PCA(n_components=n_comp, random_state=42)
+            pca.fit(X)
+            return {
+                'explained_variance_ratio': [round(float(v), 4) for v in pca.explained_variance_ratio_],
+                'cumulative_variance': [round(float(v), 4) for v in np.cumsum(pca.explained_variance_ratio_)],
+                'n_components': n_comp,
+                'n_features': len(nc),
+            }
+        except Exception as e:
+            logger.warning(f"PCA computation failed: {e}")
+            return None
+
+    # ── Cluster preview ───────────────────────────────────────────────────
+    def _cluster_preview(self, df: pd.DataFrame, nc: list) -> dict | None:
+        """Run KMeans (k=2..6) and return the best-k cluster assignments projected onto PC1/PC2."""
+        if len(nc) < 3:
+            return None
+        try:
+            from sklearn.decomposition import PCA
+            from sklearn.preprocessing import StandardScaler
+            from sklearn.cluster import KMeans
+            sub = df[nc].dropna()
+            if len(sub) < 50:
+                return None
+            X = StandardScaler().fit_transform(sub)
+            pca = PCA(n_components=2, random_state=42)
+            coords = pca.fit_transform(X)
+
+            best_k, best_inertia_drop = 2, 0
+            prev_inertia = None
+            for k in range(2, min(7, len(sub))):
+                km = KMeans(n_clusters=k, n_init=5, max_iter=100, random_state=42)
+                km.fit(X)
+                if prev_inertia is not None:
+                    drop = prev_inertia - km.inertia_
+                    if drop > best_inertia_drop:
+                        best_inertia_drop = drop
+                        best_k = k
+                prev_inertia = km.inertia_
+
+            km_final = KMeans(n_clusters=best_k, n_init=10, max_iter=200, random_state=42)
+            labels = km_final.fit_predict(X).tolist()
+
+            # Downsample points for chart (max 2000)
+            max_pts = 2000
+            if len(coords) > max_pts:
+                idx = np.random.RandomState(42).choice(len(coords), max_pts, replace=False)
+                coords = coords[idx]
+                labels = [labels[i] for i in idx]
+
+            return {
+                'pc1': [round(float(v), 4) for v in coords[:, 0]],
+                'pc2': [round(float(v), 4) for v in coords[:, 1]],
+                'labels': labels,
+                'n_clusters': best_k,
+                'pc1_var': round(float(pca.explained_variance_ratio_[0]), 4),
+                'pc2_var': round(float(pca.explained_variance_ratio_[1]), 4),
+            }
+        except Exception as e:
+            logger.warning(f"Cluster preview failed: {e}")
+            return None

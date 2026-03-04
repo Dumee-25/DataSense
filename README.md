@@ -63,13 +63,21 @@ The entire analysis runs as a 7-step background pipeline with real-time progress
 - **Works without AI** — if no AI provider is available, you still get rule-based insights; if the AI is slow, it automatically adjusts to keep things moving
 
 ### Charts & Visualization
-- **6 auto-generated charts** — built from pre-computed results, adapts layout for wide datasets
+- **14 auto-generated charts** — built from pre-computed results, adapts layout for wide datasets
   - **Data Health Radar** — overall data quality scores at a glance
   - **Missing Values** — shows which columns have gaps and how much
   - **Correlation** — heatmap (small datasets) or bar chart (wide datasets) showing which columns are related
   - **Target Distribution** — how balanced your target column is
   - **Outlier Severity** — which columns have unusual values and how many
   - **Skewness** — how lopsided each column's data distribution is
+  - **Column Types** — donut chart showing the breakdown of data types across columns
+  - **Duplicate Rows** — unique vs duplicate row counts
+  - **Cardinality** — unique value counts per column, helps spot IDs and low-variance columns
+  - **Feature Importance** — estimated importance of each feature based on correlation with the target
+  - **Missing Data Pattern** — sorted overview of all columns that have gaps
+  - **Box Plots** — spread and outliers for the top numeric columns
+  - **PCA Variance** — how much variance each principal component explains
+  - **Cluster Preview** — data projected onto first two principal components, coloured by auto-detected cluster
 - **Smart display** — charts that have no relevant data are automatically hidden
 - **Downloadable** — each chart can be downloaded as a PNG image
 
@@ -251,7 +259,7 @@ If no AI provider is available, DataSense still works — you get rule-based ins
 3. **Explore results** — Browse findings across six tabs:
    - **Summary** — overview of your data, key story, quick wins, and how many issues were found
    - **Findings** — expandable cards for each issue with what's wrong, why it matters, and how to fix it
-   - **Charts** — 6 visual charts covering data health, missing values, correlations, target balance, outliers, and skewness
+   - **Charts** — 14 visual charts covering data health, missing values, correlations, target balance, outliers, skewness, column types, duplicates, cardinality, feature importance, missing patterns, box plots, PCA variance, and cluster preview
    - **Relations** — how columns relate to each other, plus guidance on class imbalance if relevant
    - **Model** — which ML model to use, why, alternatives, data prep steps, and how to test it
    - **Columns** — profile of every column (type, missing %, unique values, notes)
@@ -300,13 +308,13 @@ datasense/
 │   │   └── auth_routes.py       # Login/register endpoints
 │   ├── core/
 │   │   ├── structural_analyzer.py   # Detects column types, missing data, duplicates
-│   │   ├── statistical_engine.py    # Finds correlations, outliers, data patterns
+│   │   ├── statistical_engine.py    # Finds correlations, outliers, data patterns, PCA, clustering
 │   │   ├── model_recommender.py     # Picks the best ML model for the data
 │   │   ├── insight_generator.py     # AI-powered plain-language explanations
 │   │   ├── deterministic_summary.py # Prepares computed facts for the AI (no raw data sent)
 │   │   ├── aggregation_engine.py    # Groups similar findings together
 │   │   ├── relevance_filter.py      # Adjusts findings based on the recommended model
-│   │   ├── chart_engine.py          # Generates the 6 analysis charts
+│   │   ├── chart_engine.py          # Generates the 14 analysis charts
 │   │   └── pdf_generator.py         # Creates downloadable PDF reports
 │   ├── database/
 │   │   ├── connection.py        # Database connection setup

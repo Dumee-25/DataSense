@@ -123,7 +123,9 @@ class ChartEngine:
 
         Returns:
             Dict with keys: missing_values, correlation, target_distribution,
-            outliers, skewness, data_health_radar
+            outliers, skewness, data_health_radar, column_types, duplicates,
+            cardinality, feature_importance, missing_pattern, box_plots,
+            pca_variance, cluster_preview
             Values are PNG bytes or None if the chart was skipped.
         """
         res   = results.get('results', {})
@@ -138,6 +140,8 @@ class ChartEngine:
         dist_summary = stats.get('distribution_summary', [])
         basic        = st.get('basic_info', res.get('dataset_info', {}))
         target_cands = st.get('target_candidates', [])
+        pca_summary  = stats.get('pca_summary')
+        cluster_data = stats.get('cluster_preview')
 
         charts: Dict[str, Optional[bytes]] = {}
 
@@ -148,6 +152,14 @@ class ChartEngine:
             ('outliers',            self._chart_outliers,     (outliers,)),
             ('skewness',            self._chart_skewness,     (dist_summary,)),
             ('data_health_radar',   self._chart_health_radar, (basic, stats, ins)),
+            ('column_types',        self._chart_column_types, (profiles,)),
+            ('duplicates',          self._chart_duplicates,   (basic,)),
+            ('cardinality',         self._chart_cardinality,  (profiles,)),
+            ('feature_importance',  self._chart_feature_importance, (target_cands, profiles, correlations)),
+            ('missing_pattern',     self._chart_missing_pattern,   (profiles, basic)),
+            ('box_plots',           self._chart_box_plots,         (profiles,)),
+            ('pca_variance',        self._chart_pca_variance,      (pca_summary,)),
+            ('cluster_preview',     self._chart_cluster_preview,   (cluster_data,)),
         ]:
             try:
                 charts[name] = fn(*args)
@@ -650,5 +662,384 @@ class ChartEngine:
         ax.set_title(f"Data Health  ·  {health_label} ({overall:.0f}/100)",
                      fontsize=9.5, fontweight="bold", color=_DARK, pad=14)
 
+        plt.tight_layout()
+        return _fig_to_bytes(fig)
+
+    # ── Chart 7: Column Types (donut) ─────────────────────────────────────
+    def _chart_column_types(self, profiles: list) -> Optional[bytes]:
+        """Donut chart showing the breakdown of column data types."""
+        if not profiles:
+            return None
+        import numpy as np
+        plt, mpatches = _mpl()
+
+        type_counts: dict[str, int] = {}
+        for p in profiles:
+            dtype = p.get('dtype', 'unknown')
+            # Simplify dtype labels
+            if 'int' in dtype or 'float' in dtype:
+                label = 'Numeric'
+            elif dtype in ('object', 'string', 'str'):
+                label = 'Text'
+            elif 'datetime' in dtype or 'date' in dtype:
+                label = 'Datetime'
+            elif 'bool' in dtype:
+                label = 'Boolean'
+            elif 'category' in dtype:
+                label = 'Categorical'
+            else:
+                label = 'Other'
+            type_counts[label] = type_counts.get(label, 0) + 1
+
+        if not type_counts:
+            return None
+
+        labels = list(type_counts.keys())
+        sizes  = list(type_counts.values())
+        colors = [_BRAND, _TEAL, _ACCENT, _HIGH, _SUCCESS, _MUTED][:len(labels)]
+
+        fig, ax = plt.subplots(figsize=(4.2, 3.2), facecolor="#FAFAFA")
+        ax.set_facecolor("#FAFAFA")
+        wedges, texts, autotexts = ax.pie(
+            sizes, labels=None, autopct=lambda p: f"{p:.0f}%" if p >= 5 else "",
+            colors=colors, startangle=90, pctdistance=0.78,
+            wedgeprops=dict(width=0.45, edgecolor="#FAFAFA", linewidth=2),
+        )
+        for t in autotexts:
+            t.set_fontsize(8)
+            t.set_color(_DARK)
+            t.set_fontweight("bold")
+
+        ax.legend(
+            [f"{l} ({s})" for l, s in zip(labels, sizes)],
+            loc="center left", bbox_to_anchor=(0.92, 0.5), fontsize=8,
+            frameon=False, labelcolor=_DARK,
+        )
+        total = sum(sizes)
+        ax.text(0, 0, f"{total}\ncols", ha="center", va="center",
+                fontsize=12, fontweight="bold", color=_DARK)
+        ax.set_title("Column Types", fontsize=10, fontweight="bold", color=_DARK, pad=10)
+        plt.tight_layout()
+        return _fig_to_bytes(fig)
+
+    # ── Chart 8: Duplicates ───────────────────────────────────────────────
+    def _chart_duplicates(self, basic: dict) -> Optional[bytes]:
+        """Simple bar showing unique vs duplicate rows."""
+        total   = basic.get('rows', 0)
+        dup     = basic.get('duplicate_rows', 0)
+        if total <= 0:
+            return None
+        unique = total - dup
+        dup_pct = dup / total * 100
+
+        # Skip if zero duplicates (not interesting)
+        if dup == 0:
+            return None
+
+        plt, _ = _mpl()
+        fig, ax = _styled_fig(4.5, 3.0)
+        ax.grid(axis="y", color=_EDGE, linewidth=0.6, linestyle="--", alpha=0.7)
+        ax.grid(axis="x", visible=False)
+
+        bars = ax.bar(
+            ["Unique", "Duplicate"], [unique, dup],
+            color=[_SUCCESS, _CRITICAL], width=0.55, zorder=3,
+        )
+        for bar, val in zip(bars, [unique, dup]):
+            pct = val / total * 100
+            ax.text(bar.get_x() + bar.get_width() / 2, bar.get_height() + total * 0.01,
+                    f"{val:,}\n({pct:.1f}%)", ha="center", va="bottom",
+                    fontsize=9, fontweight="bold", color=_DARK)
+
+        ax.set_ylabel("Rows", fontsize=9, color=_MUTED)
+        ax.set_title(f"Duplicate Rows  ·  {dup_pct:.1f}% duplicated",
+                     fontsize=10, fontweight="bold", color=_DARK, pad=10)
+        plt.tight_layout()
+        return _fig_to_bytes(fig)
+
+    # ── Chart 9: Cardinality ──────────────────────────────────────────────
+    def _chart_cardinality(self, profiles: list) -> Optional[bytes]:
+        """Horizontal bar of unique-value counts per column (top N)."""
+        items = [
+            (p['name'], p.get('unique_count', 0), p.get('unique_pct', 0))
+            for p in profiles if p.get('unique_count') is not None
+        ]
+        if not items:
+            return None
+
+        items.sort(key=lambda x: x[1], reverse=True)
+        items = items[:_BAR_MAX_COLS]
+        labels  = [i[0] for i in items]
+        values  = [i[1] for i in items]
+        pcts    = [i[2] for i in items]
+
+        fig_h = max(2.4, 0.38 * len(labels) + 0.6)
+        fig, ax = _styled_fig(7.2, fig_h)
+
+        colors = [_BRAND if p < 80 else _TEAL if p < 95 else _ACCENT for p in pcts]
+        bars = ax.barh(range(len(labels)), values, color=colors, height=0.65, zorder=3)
+
+        for bar, v, p in zip(bars, values, pcts):
+            ax.text(bar.get_width() + max(values) * 0.01,
+                    bar.get_y() + bar.get_height() / 2,
+                    f"{v:,}  ({p:.0f}%)", va="center", ha="left",
+                    fontsize=7.5, color=_DARK)
+
+        ax.set_yticks(range(len(labels)))
+        ax.set_yticklabels(
+            [l[:28] + "…" if len(l) > 28 else l for l in labels],
+            fontsize=8.5, color=_DARK,
+        )
+        ax.set_xlabel("Unique Values", fontsize=9, color=_MUTED)
+        ax.set_xlim(0, max(values) * 1.25)
+        ax.invert_yaxis()
+        ax.set_title("Cardinality by Column", fontsize=10, fontweight="bold", color=_DARK, pad=10)
+
+        plt, _ = _mpl()
+        plt.tight_layout()
+        return _fig_to_bytes(fig)
+
+    # ── Chart 10: Feature Importance (estimated) ──────────────────────────
+    def _chart_feature_importance(self, target_cands: list, profiles: list,
+                                   correlations: list) -> Optional[bytes]:
+        """Bar chart of estimated feature importance based on correlation with target."""
+        if not target_cands or not correlations:
+            return None
+        target_col = target_cands[0].get('column', '')
+        if not target_col:
+            return None
+
+        # Gather absolute correlations with the target column
+        importance = []
+        for pair in correlations:
+            if pair['col_a'] == target_col:
+                importance.append((pair['col_b'], abs(pair['correlation'])))
+            elif pair['col_b'] == target_col:
+                importance.append((pair['col_a'], abs(pair['correlation'])))
+
+        if not importance:
+            return None
+
+        importance.sort(key=lambda x: x[1], reverse=True)
+        importance = importance[:_BAR_MAX_COLS]
+        labels = [i[0] for i in importance]
+        values = [i[1] for i in importance]
+
+        fig_h = max(2.4, 0.38 * len(labels) + 0.6)
+        fig, ax = _styled_fig(7.2, fig_h)
+
+        colors = [
+            _BRAND if v >= 0.5 else _TEAL if v >= 0.3 else _MUTED
+            for v in values
+        ]
+        bars = ax.barh(range(len(labels)), values, color=colors, height=0.65, zorder=3)
+
+        for bar, v in zip(bars, values):
+            ax.text(bar.get_width() + 0.01, bar.get_y() + bar.get_height() / 2,
+                    f"{v:.3f}", va="center", ha="left", fontsize=8,
+                    color=_DARK, fontweight="bold")
+
+        ax.axvline(0.3, color=_TEAL,  linestyle=":", linewidth=1.1, alpha=0.7)
+        ax.axvline(0.5, color=_BRAND, linestyle=":", linewidth=1.1, alpha=0.7)
+
+        ax.set_yticks(range(len(labels)))
+        ax.set_yticklabels(
+            [l[:28] + "…" if len(l) > 28 else l for l in labels],
+            fontsize=8.5, color=_DARK,
+        )
+        ax.set_xlabel("|Correlation| with target", fontsize=9, color=_MUTED)
+        ax.set_xlim(0, min(max(values) * 1.18, 1.05))
+        ax.invert_yaxis()
+        ax.set_title(f'Feature Importance  ·  target: "{target_col}"',
+                     fontsize=10, fontweight="bold", color=_DARK, pad=10)
+
+        plt, _ = _mpl()
+        plt.tight_layout()
+        return _fig_to_bytes(fig)
+
+    # ── Chart 11: Missing Pattern (matrix) ────────────────────────────────
+    def _chart_missing_pattern(self, profiles: list, basic: dict) -> Optional[bytes]:
+        """Binary heatmap showing which columns have missing data together."""
+        cols_with_missing = [
+            p['name'] for p in profiles if p.get('missing_pct', 0) > 0
+        ]
+        if len(cols_with_missing) < 2:
+            return None
+
+        # Build a co-missing matrix from profiles only (no raw data needed).
+        # We show % missing per column as vertical bars — gives a pattern overview.
+        cols_with_missing.sort(
+            key=lambda c: next((p['missing_pct'] for p in profiles if p['name'] == c), 0),
+            reverse=True,
+        )
+        cols_with_missing = cols_with_missing[:20]  # cap to keep readable
+        missing_pcts = [
+            next((p['missing_pct'] for p in profiles if p['name'] == c), 0)
+            for c in cols_with_missing
+        ]
+
+        plt, _ = _mpl()
+        fig, ax = _styled_fig(7.2, max(2.6, len(cols_with_missing) * 0.25 + 0.8))
+
+        colors = [
+            _CRITICAL if v >= 50 else _HIGH if v >= 20 else _MEDIUM if v >= 5 else _TEAL
+            for v in missing_pcts
+        ]
+        bars = ax.barh(range(len(cols_with_missing)), missing_pcts, color=colors, height=0.65, zorder=3)
+
+        for bar, v in zip(bars, missing_pcts):
+            ax.text(bar.get_width() + 0.3, bar.get_y() + bar.get_height() / 2,
+                    f"{v:.1f}%", va="center", ha="left", fontsize=8, color=_DARK, fontweight="bold")
+
+        ax.set_yticks(range(len(cols_with_missing)))
+        ax.set_yticklabels(
+            [c[:28] + "…" if len(c) > 28 else c for c in cols_with_missing],
+            fontsize=8.5, color=_DARK,
+        )
+        ax.set_xlabel("Missing %", fontsize=9, color=_MUTED)
+        ax.set_xlim(0, max(missing_pcts) * 1.18)
+        ax.invert_yaxis()
+        ax.set_title("Missing Data Pattern  ·  columns with gaps",
+                     fontsize=10, fontweight="bold", color=_DARK, pad=10)
+        plt.tight_layout()
+        return _fig_to_bytes(fig)
+
+    # ── Chart 12: Box Plots ───────────────────────────────────────────────
+    def _chart_box_plots(self, profiles: list) -> Optional[bytes]:
+        """Side-by-side box plots for top numeric columns using profile stats."""
+        numeric_profiles = [
+            p for p in profiles
+            if p.get('dtype', '') in ('int64', 'float64', 'int32', 'float32',
+                                       'Int64', 'Float64')
+            and all(k in p for k in ('min', 'max', 'mean', 'q25', 'q75'))
+        ]
+        if not numeric_profiles:
+            return None
+
+        # Take at most 12 columns
+        numeric_profiles = numeric_profiles[:12]
+        n = len(numeric_profiles)
+
+        plt, _ = _mpl()
+        fig_w = max(5.0, n * 0.8 + 1.2)
+        fig, ax = _styled_fig(min(fig_w, 7.2), 3.6)
+        ax.grid(axis="y", color=_EDGE, linewidth=0.6, linestyle="--", alpha=0.7)
+        ax.grid(axis="x", visible=False)
+
+        # Build synthetic box plot data from profile stats
+        bplot_data = []
+        labels_arr = []
+        for p in numeric_profiles:
+            q25 = float(p['q25'])
+            q75 = float(p['q75'])
+            med = float(p.get('median', p.get('mean', (q25 + q75) / 2)))
+            mn  = float(p['min'])
+            mx  = float(p['max'])
+            # whisker = 1.5 IQR capped at actual min/max
+            iqr = q75 - q25
+            wlo = max(mn, q25 - 1.5 * iqr)
+            whi = min(mx, q75 + 1.5 * iqr)
+            bplot_data.append({
+                'med': med, 'q1': q25, 'q3': q75,
+                'whislo': wlo, 'whishi': whi,
+            })
+            name = p['name']
+            labels_arr.append(name[:16] + "…" if len(name) > 16 else name)
+
+        ax.bxp(bplot_data, showfliers=False, patch_artist=True,
+                boxprops=dict(facecolor=_SOFT_BLUE, edgecolor=_BRAND, linewidth=1.2),
+                medianprops=dict(color=_CRITICAL, linewidth=1.5),
+                whiskerprops=dict(color=_MUTED, linewidth=1),
+                capprops=dict(color=_MUTED, linewidth=1))
+
+        ax.set_xticklabels(labels_arr, fontsize=7.5, rotation=30 if n > 6 else 0, ha="right")
+        ax.set_ylabel("Value", fontsize=9, color=_MUTED)
+        ax.set_title("Box Plots  ·  Numeric Columns",
+                     fontsize=10, fontweight="bold", color=_DARK, pad=10)
+        plt.tight_layout()
+        return _fig_to_bytes(fig)
+
+    # ── Chart 13: PCA Variance ────────────────────────────────────────────
+    def _chart_pca_variance(self, pca_summary: dict | None) -> Optional[bytes]:
+        """Bar + line chart of explained variance per principal component."""
+        if not pca_summary:
+            return None
+        evr  = pca_summary.get('explained_variance_ratio', [])
+        cumv = pca_summary.get('cumulative_variance', [])
+        if not evr:
+            return None
+
+        plt, _ = _mpl()
+        n = len(evr)
+        fig, ax = _styled_fig(*_WIDE)
+        ax.grid(axis="y", color=_EDGE, linewidth=0.6, linestyle="--", alpha=0.7)
+        ax.grid(axis="x", visible=False)
+
+        xs = list(range(1, n + 1))
+        bars = ax.bar(xs, [v * 100 for v in evr], color=_BRAND, width=0.6, zorder=3, label="Individual")
+        ax2 = ax.twinx()
+        ax2.plot(xs, [v * 100 for v in cumv], color=_CRITICAL, marker="o", markersize=5,
+                 linewidth=2, zorder=4, label="Cumulative")
+        ax2.set_ylabel("Cumulative %", fontsize=9, color=_CRITICAL)
+        ax2.spines["top"].set_visible(False)
+        ax2.spines["right"].set_color(_CRITICAL)
+        ax2.tick_params(axis="y", colors=_CRITICAL, labelsize=8)
+        ax2.set_ylim(0, 105)
+
+        for bar, v in zip(bars, evr):
+            if v >= 0.05:
+                ax.text(bar.get_x() + bar.get_width() / 2, bar.get_height() + 0.5,
+                        f"{v*100:.1f}%", ha="center", va="bottom", fontsize=7.5,
+                        color=_DARK, fontweight="bold")
+
+        ax.set_xlabel("Principal Component", fontsize=9, color=_MUTED)
+        ax.set_ylabel("Explained Variance %", fontsize=9, color=_MUTED)
+        ax.set_xticks(xs)
+        ax.set_xticklabels([f"PC{i}" for i in xs], fontsize=8)
+
+        n_feat = pca_summary.get('n_features', '?')
+        ax.set_title(f"PCA Variance  ·  {n} components from {n_feat} features",
+                     fontsize=10, fontweight="bold", color=_DARK, pad=10)
+
+        # Combined legend
+        lines_a, labels_a = ax.get_legend_handles_labels()
+        lines_b, labels_b = ax2.get_legend_handles_labels()
+        ax.legend(lines_a + lines_b, labels_a + labels_b, fontsize=8, frameon=False,
+                  loc="upper right")
+
+        plt.tight_layout()
+        return _fig_to_bytes(fig)
+
+    # ── Chart 14: Cluster Preview ─────────────────────────────────────────
+    def _chart_cluster_preview(self, cluster_data: dict | None) -> Optional[bytes]:
+        """Scatter plot of data projected onto first 2 principal components, coloured by cluster."""
+        if not cluster_data:
+            return None
+        import numpy as np
+        plt, _ = _mpl()
+
+        pc1 = cluster_data['pc1']
+        pc2 = cluster_data['pc2']
+        labels = cluster_data['labels']
+        k   = cluster_data['n_clusters']
+        v1  = cluster_data.get('pc1_var', 0) * 100
+        v2  = cluster_data.get('pc2_var', 0) * 100
+
+        fig, ax = _styled_fig(*_WIDE_TALL)
+        cluster_colors = _GRAD[:k]
+
+        for ci in range(k):
+            mask = [i for i, l in enumerate(labels) if l == ci]
+            ax.scatter(
+                [pc1[i] for i in mask], [pc2[i] for i in mask],
+                c=cluster_colors[ci], s=8, alpha=0.55, label=f"Cluster {ci}",
+                edgecolors="none", zorder=3,
+            )
+
+        ax.set_xlabel(f"PC1 ({v1:.1f}% var)", fontsize=9, color=_MUTED)
+        ax.set_ylabel(f"PC2 ({v2:.1f}% var)", fontsize=9, color=_MUTED)
+        ax.legend(fontsize=8, frameon=False, loc="best", markerscale=2.5)
+        ax.set_title(f"Cluster Preview  ·  k = {k} (auto-selected)",
+                     fontsize=10, fontweight="bold", color=_DARK, pad=10)
         plt.tight_layout()
         return _fig_to_bytes(fig)

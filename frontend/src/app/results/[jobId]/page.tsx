@@ -532,6 +532,14 @@ export default function ResultsPage() {
                   { key: "target_distribution", label: "Target Distribution" },
                   { key: "outliers",          label: "Outlier Severity" },
                   { key: "skewness",          label: "Distribution Skewness" },
+                  { key: "column_types",      label: "Column Types" },
+                  { key: "duplicates",        label: "Duplicate Rows" },
+                  { key: "cardinality",       label: "Cardinality" },
+                  { key: "feature_importance", label: "Feature Importance" },
+                  { key: "missing_pattern",   label: "Missing Data Pattern" },
+                  { key: "box_plots",         label: "Box Plots" },
+                  { key: "pca_variance",      label: "PCA Variance" },
+                  { key: "cluster_preview",   label: "Cluster Preview" },
                 ].map(({ key, label }) => {
                   const b64 = charts[key]
                   if (!b64) return null
