@@ -1,10 +1,7 @@
-import os
-import time
 import logging
 from typing import Optional
-from collections import defaultdict
 
-from fastapi import APIRouter, HTTPException, Depends, Response, Cookie, Request
+from fastapi import APIRouter, HTTPException, Depends, Response, Cookie
 from pydantic import BaseModel, EmailStr, field_validator
 from sqlalchemy.orm import Session as DBSession
 
@@ -19,22 +16,6 @@ logger = logging.getLogger(__name__)
 auth_router = APIRouter(tags=["auth"])
 
 ACCESS_TOKEN_EXPIRE_HOURS = 168  # 7 days
-COOKIE_SECURE = os.getenv("COOKIE_SECURE", "false").lower() == "true"
-
-# ── Simple in-memory rate limiter ─────────────────────────────────────────────
-_rate_limits: dict = defaultdict(list)
-_RATE_WINDOW = 300  # 5 minutes
-_RATE_MAX_ATTEMPTS = 10
-
-
-def _check_rate_limit(key: str) -> bool:
-    """Returns True if rate limited."""
-    now = time.time()
-    _rate_limits[key] = [t for t in _rate_limits[key] if now - t < _RATE_WINDOW]
-    if len(_rate_limits[key]) >= _RATE_MAX_ATTEMPTS:
-        return True
-    _rate_limits[key].append(now)
-    return False
 
 
 # ── Request / Response Models ─────────────────────────────────────────────────
@@ -80,7 +61,6 @@ def _set_auth_cookie(response: Response, token: str):
         value=token,
         max_age=60 * 60 * ACCESS_TOKEN_EXPIRE_HOURS,
         httponly=True,
-        secure=COOKIE_SECURE,
         samesite="lax",
     )
 
@@ -91,7 +71,6 @@ def _set_auth_cookie(response: Response, token: str):
 def register(
     body: RegisterRequest,
     response: Response,
-    request: Request,
     db: DBSession = Depends(get_db),
     datasense_session: Optional[str] = Cookie(default=None),
 ):
@@ -100,10 +79,6 @@ def register(
     Any jobs from the current anonymous session are automatically linked
     to the new account so history is preserved.
     """
-    client_ip = request.client.host if request.client else "unknown"
-    if _check_rate_limit(f"register:{client_ip}"):
-        raise HTTPException(status_code=429, detail="Too many attempts. Please try again later.")
-
     existing = auth_crud.get_user_by_email(db, body.email)
     if existing:
         raise HTTPException(status_code=409, detail="An account with this email already exists.")
@@ -132,7 +107,6 @@ def register(
 def login(
     body: LoginRequest,
     response: Response,
-    request: Request,
     db: DBSession = Depends(get_db),
     datasense_session: Optional[str] = Cookie(default=None),
 ):
@@ -140,10 +114,6 @@ def login(
     Log in with email and password.
     Anonymous session jobs are linked to the account on login.
     """
-    client_ip = request.client.host if request.client else "unknown"
-    if _check_rate_limit(f"login:{client_ip}"):
-        raise HTTPException(status_code=429, detail="Too many attempts. Please try again later.")
-
     user = auth_crud.authenticate_user(db, body.email, body.password)
     if not user:
         raise HTTPException(status_code=401, detail="Invalid email or password.")

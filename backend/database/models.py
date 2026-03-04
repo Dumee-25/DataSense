@@ -1,6 +1,6 @@
 import uuid
 import enum
-from datetime import datetime, timezone
+from datetime import datetime
 from sqlalchemy import (
     Column, String, Float, Integer, Boolean,
     DateTime, Text, ForeignKey, Enum as SAEnum
@@ -8,11 +8,6 @@ from sqlalchemy import (
 from sqlalchemy.dialects.postgresql import UUID, JSONB
 from sqlalchemy.orm import relationship
 from database.connection import Base
-
-
-def _utcnow():
-    """Timezone-aware UTC now (replaces deprecated datetime.utcnow)."""
-    return datetime.now(timezone.utc)
 
 
 class UserRole(str, enum.Enum):
@@ -39,7 +34,7 @@ class User(Base):
     name = Column(String(100), nullable=True)
     role = Column(SAEnum(UserRole), default=UserRole.analyst, nullable=False)
     is_active = Column(Boolean, default=True, nullable=False)
-    created_at = Column(DateTime, default=_utcnow, nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
     last_login = Column(DateTime, nullable=True)
 
     sessions = relationship("Session", back_populates="user", cascade="all, delete-orphan")
@@ -55,7 +50,7 @@ class Session(Base):
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
-    created_at = Column(DateTime, default=_utcnow, nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
     expires_at = Column(DateTime, nullable=False)
 
     user = relationship("User", back_populates="sessions")
@@ -80,8 +75,8 @@ class Job(Base):
     error = Column(Text, nullable=True)
     error_type = Column(String(100), nullable=True)
     processing_time_seconds = Column(Float, nullable=True)
-    created_at = Column(DateTime, default=_utcnow, nullable=False, index=True)
-    updated_at = Column(DateTime, default=_utcnow, onupdate=_utcnow, nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False, index=True)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
     completed_at = Column(DateTime, nullable=True)
 
     user = relationship("User", back_populates="jobs")
@@ -120,7 +115,7 @@ class Result(Base):
     model_recommendations = Column(JSONB, nullable=True)
     insights = Column(JSONB, nullable=True)
     dataset_info = Column(JSONB, nullable=True)
-    created_at = Column(DateTime, default=_utcnow, nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
 
     job = relationship("Job", back_populates="result")
 
@@ -149,6 +144,6 @@ class DatasetMetadata(Base):
     high_issues_count = Column(Integer, default=0)
     medium_issues_count = Column(Integer, default=0)
     primary_model_recommendation = Column(String(100), nullable=True)
-    created_at = Column(DateTime, default=_utcnow, nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
 
     job = relationship("Job", back_populates="metadata_")

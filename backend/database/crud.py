@@ -1,30 +1,10 @@
 import uuid
-import time
-import logging
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
 from typing import Optional, List
 from sqlalchemy.orm import Session as DBSession
 from sqlalchemy import desc
-from sqlalchemy.exc import OperationalError
 
 from database.models import User, Session, Job, Result, DatasetMetadata, JobStatus
-
-logger = logging.getLogger(__name__)
-
-
-def _retry_commit(db: DBSession, max_retries: int = 3, delay: float = 0.5):
-    """Retry db.commit() on transient database errors."""
-    for attempt in range(max_retries):
-        try:
-            db.commit()
-            return
-        except OperationalError as e:
-            db.rollback()
-            if attempt < max_retries - 1:
-                logger.warning(f"DB transient error (attempt {attempt + 1}/{max_retries}): {e}")
-                time.sleep(delay * (attempt + 1))
-            else:
-                raise
 
 
 # ─── Session CRUD ─────────────────────────────────────────────────────────────
@@ -33,7 +13,7 @@ def create_session(db: DBSession, user_id=None, hours: int = 168) -> Session:
     """Create a browser session. Default expiry: 7 days."""
     session = Session(
         user_id=user_id,
-        expires_at=datetime.now(timezone.utc) + timedelta(hours=hours)
+        expires_at=datetime.utcnow() + timedelta(hours=hours)
     )
     db.add(session)
     db.commit()
@@ -48,7 +28,7 @@ def get_session(db: DBSession, session_id: str) -> Optional[Session]:
     except (ValueError, AttributeError):
         return None
     session = db.query(Session).filter(Session.id == sid).first()
-    if session and session.expires_at < datetime.now(timezone.utc):
+    if session and session.expires_at < datetime.utcnow():
         return None
     return session
 
@@ -107,9 +87,9 @@ def update_job_progress(db: DBSession, job_id: str, progress: int, message: str)
     db.query(Job).filter(Job.id == jid).update({
         "progress": progress,
         "progress_message": message,
-        "updated_at": datetime.now(timezone.utc)
+        "updated_at": datetime.utcnow()
     })
-    _retry_commit(db)
+    db.commit()
 
 
 def update_job_status(db: DBSession, job_id: str, status: JobStatus, **kwargs):
@@ -118,10 +98,10 @@ def update_job_status(db: DBSession, job_id: str, status: JobStatus, **kwargs):
         jid = uuid.UUID(job_id)
     except (ValueError, AttributeError):
         return
-    updates = {"status": status, "updated_at": datetime.now(timezone.utc)}
+    updates = {"status": status, "updated_at": datetime.utcnow()}
     updates.update(kwargs)
     db.query(Job).filter(Job.id == jid).update(updates)
-    _retry_commit(db)
+    db.commit()
 
 
 def complete_job(db: DBSession, job_id: str, processing_time_seconds: float):
@@ -131,7 +111,7 @@ def complete_job(db: DBSession, job_id: str, processing_time_seconds: float):
         status=JobStatus.completed,
         progress=100,
         progress_message="Analysis complete",
-        completed_at=datetime.now(timezone.utc),
+        completed_at=datetime.utcnow(),
         processing_time_seconds=processing_time_seconds
     )
 
@@ -203,7 +183,7 @@ def get_jobs_for_user(
 
 def cleanup_expired_jobs(db: DBSession, older_than_hours: int = 48) -> int:
     """Delete jobs older than retention period. Returns count deleted."""
-    cutoff = datetime.now(timezone.utc) - timedelta(hours=older_than_hours)
+    cutoff = datetime.utcnow() - timedelta(hours=older_than_hours)
     jobs = db.query(Job).filter(Job.created_at < cutoff).all()
     count = len(jobs)
     for job in jobs:
@@ -233,7 +213,7 @@ def save_result(
         dataset_info=dataset_info
     )
     db.add(result)
-    _retry_commit(db)
+    db.commit()
     db.refresh(result)
     return result
 
@@ -273,18 +253,6 @@ def save_metadata(
         primary_model_recommendation=recommendations.get("primary_model")
     )
     db.add(metadata)
-    _retry_commit(db)
+    db.commit()
     db.refresh(metadata)
     return metadata
-
-
-def cleanup_expired_sessions(db: DBSession) -> int:
-    """Delete sessions past their expiry time. Returns count deleted."""
-    now = datetime.now(timezone.utc)
-    expired = db.query(Session).filter(Session.expires_at < now).all()
-    count = len(expired)
-    for s in expired:
-        db.delete(s)
-    if count:
-        _retry_commit(db)
-    return count

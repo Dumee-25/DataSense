@@ -1,5 +1,5 @@
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime
 from typing import Optional
 from sqlalchemy.orm import Session as DBSession
 
@@ -42,7 +42,7 @@ def authenticate_user(db: DBSession, email: str, password: str) -> Optional[User
     if not user.is_active:
         return None
     # Update last login
-    user.last_login = datetime.now(timezone.utc)
+    user.last_login = datetime.utcnow()
     db.commit()
     return user
 

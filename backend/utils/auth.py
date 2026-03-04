@@ -1,18 +1,11 @@
 import os
-import logging
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
 from typing import Optional
 
 import bcrypt
 from jose import JWTError, jwt
 
-logger = logging.getLogger(__name__)
-
-_secret = os.getenv("SECRET_KEY", "")
-if not _secret:
-    logger.warning("SECRET_KEY not set — using insecure default. DO NOT USE IN PRODUCTION.")
-    _secret = "dev-only-insecure-default-change-me"
-SECRET_KEY = _secret
+SECRET_KEY = os.getenv("SECRET_KEY", "change-this-in-production")
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_HOURS = int(os.getenv("ACCESS_TOKEN_EXPIRE_HOURS", "168"))  # 7 days
 
@@ -29,8 +22,8 @@ def create_access_token(user_id: str, email: str) -> str:
     payload = {
         "sub": user_id,
         "email": email,
-        "iat": datetime.now(timezone.utc),
-        "exp": datetime.now(timezone.utc) + timedelta(hours=ACCESS_TOKEN_EXPIRE_HOURS),
+        "iat": datetime.utcnow(),
+        "exp": datetime.utcnow() + timedelta(hours=ACCESS_TOKEN_EXPIRE_HOURS),
     }
     return jwt.encode(payload, SECRET_KEY, algorithm=ALGORITHM)
 
