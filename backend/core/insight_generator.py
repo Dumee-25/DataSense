@@ -13,8 +13,8 @@ logger = logging.getLogger(__name__)
 _env = os.getenv
 OLLAMA_URL      = _env("OLLAMA_URL", "http://localhost:11434/api/generate")
 OLLAMA_MODEL    = _env("OLLAMA_MODEL", "llama3.2:latest")
-LLM_TIMEOUT     = int(_env("LLM_TIMEOUT", "30"))
-LLM_BATCH_TO    = int(_env("LLM_BATCH_TIMEOUT", "60"))
+LLM_TIMEOUT     = int(_env("LLM_TIMEOUT", "60"))
+LLM_BATCH_TO    = int(_env("LLM_BATCH_TIMEOUT", "90"))
 # Context inference generates a larger structured JSON response and is on the
 # critical path before the parallel batch.  Give it its own, higher ceiling.
 LLM_CONTEXT_TIMEOUT = int(_env("LLM_CONTEXT_TIMEOUT", str(max(60, int(_env("LLM_TIMEOUT", "30")) * 2))))
@@ -98,34 +98,14 @@ class InsightMetrics:
 
 # ── Personas ──────────────────────────────────────────────────────────────────
 PERSONAS = {
-    'general': ('a friendly, knowledgeable guide explaining data findings to someone curious but not an expert',
-        ['Use plain, everyday language — no jargon whatsoever',
-         'Explain what the issue actually IS before saying why it matters',
-         'Use relatable analogies from everyday life (cooking, sports, directions)',
-         'Focus on what this means for the data quality and analysis results',
-         'End with one clear, simple action anyone can follow'],
-        'ROI, stakeholder, KPI, synergy, leverage, strategic, monetize, revenue impact'),
-    'executive': ('a trusted senior advisor speaking to a CEO or VP',
-        ['No technical jargon whatsoever', 'Focus on business impact and ROI',
-         'Use analogies from business (finance, operations)', 'Be direct and confident',
-         'End with a clear next step'],
-        'multicollinearity, heteroscedasticity, cardinality, p-value, feature importance, overfitting'),
-    'data_scientist': ('a senior ML engineer doing a peer code review',
-        ['Be precise and technical — use proper statistical terms',
-         'Reference specific sklearn/pandas APIs', 'Mention effect sizes, confidence intervals where relevant',
-         'Suggest experiments, not just fixes', 'Include code snippets'], ''),
-    'product_manager': ('a data-literate colleague explaining to a PM who is comfortable with data but not ML',
-        ['Explain the "so what?" for the product or users',
-         'Use light technical terms but define any ML-specific ones',
-         'Connect findings to user impact or KPIs', 'Be concise and actionable',
-         'Prioritise recommendations by effort vs impact'],
-        'heteroscedasticity, eigenvalue, gradient, kernel'),
+    'general':         'Plain language. No jargon. Short direct answers.',
+    'executive':       'Business language. No technical terms. Direct and brief.',
+    'data_scientist':  'Technical and precise. Include code hints.',
+    'product_manager': 'Plain language. Connect to user/product impact. Brief.',
 }
 
 def _persona_block(key: str) -> str:
-    tone, rules, avoid = PERSONAS.get(key, PERSONAS['executive'])
-    b = f"Tone: {tone}\nRules:\n" + '\n'.join(f'  - {r}' for r in rules)
-    return b + f"\nNEVER use these words: {avoid}" if avoid else b
+    return PERSONAS.get(key, PERSONAS['general'])
 
 # ── Prompt Cache ──────────────────────────────────────────────────────────────
 class PromptCache:
@@ -301,7 +281,7 @@ class LLMClient:
         max_tokens = min(max_tokens, self.token_budget)
         # Degrade token budget when the LLM is consistently slow
         if self.is_degraded:
-            reduced = max(60, int(max_tokens * 0.6))
+            reduced = max(150, int(max_tokens * 0.7))
             if reduced < max_tokens:
                 logger.info(f"[degraded] {task_name}: cutting tokens {max_tokens}→{reduced} "
                             f"(consecutive timeouts: {self._consecutive_timeouts})")
@@ -811,18 +791,13 @@ class InsightGenerator:
     # ── Persona + Context instruction ─────────────────────────────────────
     def _persona_instruction(self) -> str:
         base = _persona_block(self.persona)
-        parts = [base]
+        parts = [f"STYLE: {base}"]
 
-        # Inject user-provided data dictionary / domain context (Fix 3)
         if self._user_context:
-            parts.append(
-                f"\nUSER-PROVIDED DATA DICTIONARY (treat as ground truth for domain and column meanings):\n"
-                f"{self._user_context[:2000]}"  # cap to prevent prompt explosion
-            )
+            parts.append(f"USER CONTEXT: {self._user_context[:800]}")
 
         if self._context and self._context.is_useful():
-            ctx = self._context.summary()
-            parts.append(f"\nDATASET CONTEXT (use this to make insights specific, not generic):\n{ctx}")
+            parts.append(f"DOMAIN: {self._context.summary()}")
         return "\n".join(parts)
 
     # ── LLM Task 0: Domain Context Inference ─────────────────────────────
@@ -968,13 +943,11 @@ JSON schema (return ONLY this, no other text):
                (ch.get('has_imbalance'), "imbalanced target"), (ch.get('has_outliers'), "outliers"),
                (ch.get('is_small'), "small dataset"), (ch.get('is_large'), "large dataset")] if cond]
         prompt = f"""{self._persona_instruction()}
-DATASET: {b.get('rows',0):,} rows x {b.get('columns',0)} cols
-Missing: {b.get('missing_percentage',0):.1f}% | Dupes: {b.get('duplicate_rows',0)}
-Model: {recs.get('primary_model','')} ({recs.get('task_type','')})
-Context: {', '.join(ctx) or 'clean'}{ct}
-FINDINGS:\n{issues}
-Write 4-5 flowing sentences: honest assessment of data quality, biggest problem and how it would affect results, recommended model and why it fits, most important first step to take. Ground your language in the actual domain — say what these columns mean in plain life. No bullets."""
-        return self._llm.call(prompt, max_tokens=280, task_name='executive_summary') or fallback
+{b.get('rows',0):,} rows x {b.get('columns',0)} cols | Missing: {b.get('missing_percentage',0):.1f}% | Dupes: {b.get('duplicate_rows',0)} | Model: {recs.get('primary_model','')} ({recs.get('task_type','')})
+Issues: {', '.join(ctx) or 'clean'}{ct}
+{issues}
+Write exactly 3 short sentences: data quality, biggest problem, recommended next step. No jargon. No bullets."""
+        return self._llm.call(prompt, max_tokens=300, task_name='executive_summary') or fallback
 
     # ── LLM Task 2: Critical Deep Dive ────────────────────────────────────
     def _llm_deep_dive_critical(self, ins, bp, recs):
@@ -985,11 +958,11 @@ Write 4-5 flowing sentences: honest assessment of data quality, biggest problem 
         involved_cols = list({x.get('column') or '' for x in ins} | {c for x in ins for c in (x.get('columns') or [])})
         glossary = self._context_glossary(involved_cols)
         prompt = f"""{self._persona_instruction()}
-Dataset: {b.get('rows',0):,} rows x {b.get('columns',0)} cols. Model: {model}.{glossary}
+{b.get('rows',0):,} rows x {b.get('columns',0)} cols. Model: {model}.{glossary}
 {secs}
-For EACH issue return JSON: {{"plain_english":"explain the issue in simple terms a non-expert can understand","analysis_impact":"what goes wrong in the analysis or model if this is left unfixed","what_to_do":"specific step-by-step fix in plain language","deep_dive":"a relatable analogy or deeper explanation of why this matters"}}
-Return ONLY a JSON array of {len(ins)} objects."""
-        p = self._llm.call_json(prompt, max_tokens=min(220*len(ins), 700),
+For EACH issue return JSON: {{"plain_english":"<15 words: what is wrong>","analysis_impact":"<15 words: what breaks>","what_to_do":"<15 words: specific fix>","deep_dive":"<20 words: simple analogy>"}}
+Keep each field under 15-20 words. No jargon. Return ONLY a JSON array of {len(ins)} objects."""
+        p = self._llm.call_json(prompt, max_tokens=min(250*len(ins), 800),
             timeout=LLM_BATCH_TO, task_name='critical_deep_dive', expected_array_len=len(ins))
         if not p: return ins
         return [{**x, 'plain_english': u.get('plain_english', x.get('plain_english', '')),
@@ -1006,11 +979,11 @@ Return ONLY a JSON array of {len(ins)} objects."""
         involved_cols = [x.get('column') or x.get('var1') or '' for x in ins]
         glossary = self._context_glossary(involved_cols)
         prompt = f"""{self._persona_instruction()}
-Dataset: {b.get('rows',0):,} rows x {b.get('columns',0)} cols.{glossary}
+{b.get('rows',0):,} rows x {b.get('columns',0)} cols.{glossary}
 HIGH issues:\n{secs}
-For each: JSON {{"plain_english":"clear explanation anyone can understand","analysis_impact":"what goes wrong if this is ignored","what_to_do":"specific fix in plain steps"}}
-Return ONLY a JSON array of {len(ins)} objects."""
-        p = self._llm.call_json(prompt, max_tokens=min(130*len(ins), 500),
+For each: JSON {{"plain_english":"<15 words: what is wrong>","analysis_impact":"<15 words: consequence>","what_to_do":"<15 words: fix>"}}
+Max 15 words per field. No jargon. Return ONLY a JSON array of {len(ins)} objects."""
+        p = self._llm.call_json(prompt, max_tokens=min(200*len(ins), 600),
             timeout=LLM_BATCH_TO, task_name='high_enhance', expected_array_len=len(ins))
         if not p: return ins
         return [{**x, 'plain_english': u.get('plain_english', x.get('plain_english', '')),
@@ -1028,11 +1001,11 @@ Return ONLY a JSON array of {len(ins)} objects."""
         involved_cols = [x.get('column') or x.get('var1') or '' for x in ins]
         glossary = self._context_glossary(involved_cols)
         prompt = f"""{self._persona_instruction()}
-Dataset: {b.get('rows',0):,} rows x {b.get('columns',0)} cols.{glossary}
+{b.get('rows',0):,} rows x {b.get('columns',0)} cols.{glossary}
 MEDIUM issues:\n{secs}
-For each return JSON: {{"plain_english":"1-2 sentence plain rewrite, keep column names quoted","analysis_impact":"what could go wrong if this is ignored","what_to_do":"specific actionable fix in plain language"}}
-Return ONLY a JSON array of {len(ins)} objects."""
-        p = self._llm.call_json(prompt, max_tokens=min(110*len(ins), 450),
+For each return JSON: {{"plain_english":"<15 words: plain rewrite>","analysis_impact":"<15 words: what could go wrong>","what_to_do":"<15 words: fix>"}}
+Max 15 words per field. No jargon. Return ONLY a JSON array of {len(ins)} objects."""
+        p = self._llm.call_json(prompt, max_tokens=min(180*len(ins), 550),
             timeout=LLM_BATCH_TO, task_name='medium_enhance', expected_array_len=len(ins))
         if not p: return ins
         return [{**x,
@@ -1048,8 +1021,8 @@ Return ONLY a JSON array of {len(ins)} objects."""
         b = bp.get('basic_info', {})
         numbered = "\n".join(f"{i+1}. {w}" for i, w in enumerate(qw))
         prompt = f"""{self._persona_instruction()}
-Data cleanup steps for a {b.get('rows',0):,}-row dataset:\n{numbered}
-Rewrite each step in plain, friendly language: explain what it does and why it helps. 1-2 sentences + code. ONLY numbered rewrites."""
+Cleanup for {b.get('rows',0):,} rows:\n{numbered}
+Rewrite each as: what to do (10 words max) + code. Numbered list only."""
         r = self._llm.call(prompt, max_tokens=min(80*len(qw), TOKEN_BUDGET), task_name='quick_wins')
         if not r: return qw
         rw = OutputParser.parse_numbered_list(r, len(qw))
@@ -1070,23 +1043,20 @@ Rewrite each step in plain, friendly language: explain what it does and why it h
         domain_note = f"\nDomain: {self._context.purpose}" if self._context and self._context.is_useful() and self._context.purpose else ""
         target_note = f"\nTarget means: {self._context.target_meaning}" if self._context and self._context.target_meaning else ""
         prompt = f"""{self._persona_instruction()}
-Model: {model} | Task: {task} | Confidence: {conf:.0%} | Alternatives: {alts}
-Data characteristics: {', '.join(facts) or 'clean'}{domain_note}{target_note}
-Reasons for recommendation:
-{reasons}
-Preprocessing steps already identified: {existing_steps}
-Validation hint: {cv_hint}
-Metrics hint: {metrics_hint}
+{model} | {task} | Confidence: {conf:.0%} | Alternatives: {alts}
+Data: {', '.join(facts) or 'clean'}{domain_note}{target_note}
+Reasons: {reasons}
+Prep: {existing_steps}
 
-Return a JSON object with:
+Return JSON:
 {{
-  "why_this_model": "3-4 sentences in plain language: what {model} actually IS (like a simple analogy), why it suits THIS specific data, and if confidence < 60% mention alternatives worth trying",
-  "before_you_train": "2-3 sentences: the most important things to sort out in the data before using {model}, explained simply",
-  "how_to_validate": "2 sentences: how to check that the model is actually working well for this task and dataset size",
-  "success_metrics": "1-2 sentences: what numbers to look at to know if it worked, and what a good result looks like"
+  "why_this_model": "<25 words: what {model} is and why it fits>",
+  "before_you_train": "<20 words: key prep steps>",
+  "how_to_validate": "<15 words: how to check it works>",
+  "success_metrics": "<15 words: what metrics and what is good>"
 }}
-Return ONLY valid JSON."""
-        r = self._llm.call_json(prompt, max_tokens=320, task_name='model_guidance')
+No jargon. Return ONLY valid JSON."""
+        r = self._llm.call_json(prompt, max_tokens=350, task_name='model_guidance')
         if not r or not isinstance(r, dict): return mg
         return {**mg,
                 'why_this_model': r.get('why_this_model', mg.get('why_this_model', '')),
@@ -1105,11 +1075,11 @@ Return ONLY valid JSON."""
         involved_cols = list({r['col_a'] for r in capped} | {r['col_b'] for r in capped})
         glossary = self._context_glossary(involved_cols)
         prompt = f"""{self._persona_instruction()}{glossary}
-Column relationships found in the dataset:
+Relationships:
 {chr(10).join(numbered)}
-For each, return JSON: {{"explanation":"a memorable, everyday analogy in 1-2 sentences that explains why these columns move together, keep column names quoted","action":"what to actually do about this in the analysis"}}
-Return ONLY a JSON array of {len(capped)} objects."""
-        p = self._llm.call_json(prompt, max_tokens=min(100*len(capped), TOKEN_BUDGET),
+For each: JSON {{"explanation":"<20 words: why these move together>","action":"<15 words: what to do>"}}
+No jargon. Return ONLY a JSON array of {len(capped)} objects."""
+        p = self._llm.call_json(prompt, max_tokens=min(120*len(capped), TOKEN_BUDGET),
             timeout=LLM_BATCH_TO, task_name='relationships', expected_array_len=len(capped))
         if not p: return rels
         enhanced = []
@@ -1131,18 +1101,18 @@ Return ONLY a JSON array of {len(capped)} objects."""
         target_note = f"\nIn this dataset: {self._context.target_meaning}" if self._context and self._context.target_meaning else ""
         domain_risks = (f"\nDomain risks: " + "; ".join(self._context.key_risks[:2])) if self._context and self._context.key_risks else ""
         prompt = f"""{self._persona_instruction()}
-Dataset: {b.get('rows',0):,} rows. Target "{col}": {maj:.0f}% majority class ({nc} classes).{target_note}{domain_risks}
-Techniques available: {techniques or 'class weights, SMOTE, undersampling, threshold tuning'}
+{b.get('rows',0):,} rows. Target "{col}": {maj:.0f}% majority ({nc} classes).{target_note}{domain_risks}
+Techniques: {techniques or 'class weights, SMOTE, undersampling, threshold tuning'}
 
-Return a JSON object with:
+Return JSON:
 {{
-  "why_it_matters": "3-4 sentences: use a vivid everyday analogy (like a coin that lands heads 90% of the time) to explain why {maj:.0f}% imbalance makes the model untrustworthy, in plain language",
-  "technique_guidance": "2-3 sentences: given this specific ratio and dataset size, which technique to try first and why, explained simply",
-  "metric_reasoning": "2 sentences: explain in everyday terms why the usual accuracy measure fails here and what to use instead",
-  "first_step": "one plain, encouraging sentence describing the immediate action the user should take right now"
+  "why_it_matters": "<25 words: why {maj:.0f}% imbalance is a problem>",
+  "technique_guidance": "<20 words: which technique to try first>",
+  "metric_reasoning": "<15 words: why accuracy fails, what to use instead>",
+  "first_step": "<10 words: immediate action>"
 }}
-Return ONLY valid JSON."""
-        r = self._llm.call_json(prompt, max_tokens=280, task_name='imbalance_guidance')
+No jargon. Return ONLY valid JSON."""
+        r = self._llm.call_json(prompt, max_tokens=300, task_name='imbalance_guidance')
         if not r or not isinstance(r, dict): return g
         return {**g,
                 'why_it_matters': r.get('why_it_matters', g.get('why_it_matters', '')),
@@ -1164,15 +1134,10 @@ Return ONLY valid JSON."""
         ctx_summary = self._context.summary() if self._context and self._context.is_useful() else ""
         domain_line = f"\nDomain: {ctx_summary}" if ctx_summary else ""
         prompt = f"""{self._persona_instruction()}
-Dataset: {b.get('rows',0):,} rows × {b.get('columns',0)} cols | Task: {task} | Recommended model: {model}{domain_line}
-Missing: {b.get('missing_percentage',0):.1f}% | Duplicates: {b.get('duplicate_rows',0)} | Strong correlations: {cor_note}
-Critical issues: {'; '.join(crit_msgs) or 'none'}
-High issues: {'; '.join(high_msgs) or 'none'}
+{b.get('rows',0):,} rows × {b.get('columns',0)} cols | {task} | {model}{domain_line}
+Missing: {b.get('missing_percentage',0):.1f}% | Dupes: {b.get('duplicate_rows',0)} | Correlations: {cor_note}
+Critical: {'; '.join(crit_msgs) or 'none'}
+High: {'; '.join(high_msgs) or 'none'}
 
-Write a 5-7 sentence "data story" paragraph that:
-1. Opens with a plain description of what kind of data this is and its overall condition — use the domain context to name it specifically
-2. Describes the most important issues as a connected narrative (not a list), using language specific to this domain
-3. Explains how these issues relate to each other and compound the problem
-4. Closes with the single most important thing to fix first, and why
-Be vivid, use everyday language, and write as flowing prose — no bullets, no headers. Imagine explaining this to a curious friend who works in {self._context.domain if self._context and self._context.is_useful() else 'this field'}, not a boardroom."""
-        return self._llm.call(prompt, max_tokens=320, task_name='data_story') or ""
+Write exactly 3 short sentences as a paragraph: what this data is, the main problems, what to fix first. No jargon, no bullets."""
+        return self._llm.call(prompt, max_tokens=300, task_name='data_story') or ""
