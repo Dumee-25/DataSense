@@ -1,8 +1,10 @@
 import os
+import re as _re
 import uuid
 import math
 import shutil
 import logging
+import threading
 from datetime import datetime
 from typing import Optional
 
@@ -17,6 +19,7 @@ from core import (StructuralAnalyzer, StatisticalEngine, ModelRecommender,
                   InsightGenerator, DeterministicSummary, AggregationEngine, RelevanceFilter,
                   ChartEngine)
 from utils.data_validator import DataValidator
+from utils.dependencies import get_current_user
 
 from fastapi.responses import StreamingResponse
 import io
@@ -32,8 +35,10 @@ MAX_CONCURRENT_JOBS = int(os.getenv("MAX_CONCURRENT_JOBS", "10"))
 JOB_RETENTION_HOURS = int(os.getenv("JOB_RETENTION_HOURS", "48"))
 TEMP_UPLOAD_DIR = os.getenv("TEMP_UPLOAD_DIR", "temp_uploads")
 USE_LLM = os.getenv("USE_LLM", "true").lower() == "true"
+COOKIE_SECURE = os.getenv("COOKIE_SECURE", "false").lower() == "true"
 
 _active_jobs = 0  # In-memory concurrency counter
+_active_jobs_lock = threading.Lock()
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -50,6 +55,20 @@ def sanitize_for_json(obj):
         return obj
     return obj
 
+def _sanitize_error(error: str) -> str:
+    """Remove potentially sensitive info from error messages shown to users."""
+    sanitized = _re.sub(r'(postgresql|mysql|sqlite)://[^\s]*', '[DATABASE_URL]', str(error))
+    sanitized = _re.sub(r'[A-Za-z]:\\[^\s]*', '[PATH]', sanitized)
+    sanitized = _re.sub(r'/(?:home|var|tmp|usr|etc)/[^\s]*', '[PATH]', sanitized)
+    return sanitized[:500] if len(sanitized) > 500 else sanitized
+
+
+def _sanitize_input(text: str, max_length: int = 5000) -> str:
+    """Strip control characters and limit length of user-provided input."""
+    if not text:
+        return text
+    cleaned = _re.sub(r'[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]', '', text)
+    return cleaned[:max_length]
 
 # ── Background Pipeline ───────────────────────────────────────────────────────
 
@@ -68,10 +87,11 @@ def run_pipeline(job_id: str, file_path: str, user_context: str = "",
     global _active_jobs
     from database.connection import SessionLocal
 
-    db = SessionLocal()
     start_time = datetime.utcnow()
-    _active_jobs += 1
+    with _active_jobs_lock:
+        _active_jobs += 1
 
+    db = SessionLocal()
     try:
         logger.info(f"[{job_id}] Pipeline started: {file_path}")
 
@@ -123,7 +143,7 @@ def run_pipeline(job_id: str, file_path: str, user_context: str = "",
             logger.info(f"[{job_id}] Structural analysis complete")
         except Exception as e:
             logger.error(f"[{job_id}] Structural analysis failed: {e}", exc_info=True)
-            crud.fail_job(db, job_id, str(e), 'structural_analysis_error')
+            crud.fail_job(db, job_id, _sanitize_error(str(e)), 'structural_analysis_error')
             return
 
         # ── Step 4: Statistical Engine (55%) ──────────────────────────────
@@ -134,7 +154,7 @@ def run_pipeline(job_id: str, file_path: str, user_context: str = "",
             logger.info(f"[{job_id}] Statistical analysis complete")
         except Exception as e:
             logger.error(f"[{job_id}] Statistical analysis failed: {e}", exc_info=True)
-            crud.fail_job(db, job_id, str(e), 'statistical_analysis_error')
+            crud.fail_job(db, job_id, _sanitize_error(str(e)), 'statistical_analysis_error')
             return
 
         # ── Step 5: Model Recommendations (75%) ───────────────────────────
@@ -145,7 +165,7 @@ def run_pipeline(job_id: str, file_path: str, user_context: str = "",
             logger.info(f"[{job_id}] Model recommendations complete")
         except Exception as e:
             logger.error(f"[{job_id}] Model recommendations failed: {e}", exc_info=True)
-            crud.fail_job(db, job_id, str(e), 'recommendation_error')
+            crud.fail_job(db, job_id, _sanitize_error(str(e)), 'recommendation_error')
             return
 
         # ── Step 5b: Build deterministic summary (LLM firewall) ─────────
@@ -178,6 +198,31 @@ def run_pipeline(job_id: str, file_path: str, user_context: str = "",
                 'total_insights': 0,
                 'severity_breakdown': {'critical': 0, 'high': 0, 'medium': 0},
             }
+
+        # ── Step 6b: Filter & aggregate insights by model relevance (#24) ──
+        try:
+            model_name = recommendations.get('primary_model', '')
+            task_type = recommendations.get('task_type', 'classification')
+            all_findings = (
+                insights.get('critical_insights', []) +
+                insights.get('high_priority_insights', []) +
+                insights.get('medium_priority_insights', [])
+            )
+            if all_findings:
+                filtered = RelevanceFilter().filter(all_findings, model_name, task_type)
+                aggregated = AggregationEngine().aggregate(filtered, model_name)
+                insights['critical_insights'] = [i for i in aggregated if i.get('severity') == 'critical']
+                insights['high_priority_insights'] = [i for i in aggregated if i.get('severity') == 'high']
+                insights['medium_priority_insights'] = [i for i in aggregated if i.get('severity') == 'medium']
+                insights['total_insights'] = len(aggregated)
+                insights['severity_breakdown'] = {
+                    'critical': len(insights['critical_insights']),
+                    'high': len(insights['high_priority_insights']),
+                    'medium': len(insights['medium_priority_insights']),
+                }
+                logger.info(f"[{job_id}] Relevance filter & aggregation applied ({len(aggregated)} findings)")
+        except Exception as e:
+            logger.warning(f"[{job_id}] Aggregation/filter failed (non-fatal): {e}")
 
         # ── Step 7: Save to DB (100%) ─────────────────────────────────────
         crud.update_job_progress(db, job_id, 98, "Saving results...")
@@ -213,12 +258,13 @@ def run_pipeline(job_id: str, file_path: str, user_context: str = "",
     except Exception as e:
         logger.error(f"[{job_id}] Unexpected pipeline error: {e}", exc_info=True)
         try:
-            crud.fail_job(db, job_id, f"Unexpected error: {str(e)}", 'unexpected_error')
+            crud.fail_job(db, job_id, f"Unexpected error: {_sanitize_error(str(e))}", 'unexpected_error')
         except Exception:
             pass
 
     finally:
-        _active_jobs -= 1
+        with _active_jobs_lock:
+            _active_jobs -= 1
         db.close()
         # Always clean up temp file
         try:
@@ -263,11 +309,12 @@ async def upload_and_analyze(
         raise HTTPException(status_code=400, detail="Only CSV files are supported.")
 
     # Check concurrency limit
-    if _active_jobs >= MAX_CONCURRENT_JOBS:
-        raise HTTPException(
-            status_code=429,
-            detail=f"Server busy ({MAX_CONCURRENT_JOBS} jobs running). Please try again shortly."
-        )
+    with _active_jobs_lock:
+        if _active_jobs >= MAX_CONCURRENT_JOBS:
+            raise HTTPException(
+                status_code=429,
+                detail=f"Server busy ({MAX_CONCURRENT_JOBS} jobs running). Please try again shortly."
+            )
 
     # Get or create browser session (tracks history without login)
     session = crud.get_or_create_session(db, datasense_session)
@@ -278,6 +325,7 @@ async def upload_and_analyze(
         value=str(session.id),
         max_age=60 * 60 * 24 * 7,
         httponly=True,
+        secure=COOKIE_SECURE,
         samesite="lax",
     )
 
@@ -290,6 +338,14 @@ async def upload_and_analyze(
         session_id=session.id,
         user_id=session.user_id,
     )
+
+    # Check file size before writing to disk (#5)
+    file.file.seek(0, 2)
+    file_size_bytes = file.file.tell()
+    file.file.seek(0)
+    if file_size_bytes > MAX_FILE_SIZE_MB * 1024 * 1024:
+        crud.delete_job(db, job_id)
+        raise HTTPException(status_code=413, detail=f"File too large. Maximum is {MAX_FILE_SIZE_MB} MB.")
 
     # Save uploaded file to temp directory
     os.makedirs(TEMP_UPLOAD_DIR, exist_ok=True)
@@ -304,8 +360,8 @@ async def upload_and_analyze(
     # Kick off background pipeline
     background_tasks.add_task(
         run_pipeline, job_id, file_path,
-        user_context=context or "",
-        explicit_target=target_column or ""
+        user_context=_sanitize_input(context or ""),
+        explicit_target=_sanitize_input(target_column or "", max_length=200)
     )
     logger.info(f"[{job_id}] Job created for file: {file.filename}")
 
@@ -453,8 +509,8 @@ def delete_job(
     if not job:
         raise HTTPException(status_code=404, detail="Job not found.")
 
-    # Ownership check
-    if datasense_session and str(job.session_id) != datasense_session:
+    # Ownership check — require matching session
+    if not datasense_session or str(job.session_id) != datasense_session:
         raise HTTPException(status_code=403, detail="Not authorized to delete this job.")
 
     crud.delete_job(db, job_id)
@@ -462,10 +518,20 @@ def delete_job(
 
 
 @router.delete("/jobs")
-def cleanup_jobs(db: DBSession = Depends(get_db)):
-    """Remove jobs older than the retention period."""
+def cleanup_jobs(
+    db: DBSession = Depends(get_db),
+    current_user=Depends(get_current_user),
+):
+    """Remove jobs older than the retention period. Requires authentication."""
+    if not current_user:
+        raise HTTPException(status_code=401, detail="Authentication required for cleanup operations.")
     removed = crud.cleanup_expired_jobs(db, older_than_hours=JOB_RETENTION_HOURS)
-    return {"removed": removed, "message": f"Removed {removed} expired job(s)."}
+    sessions_removed = crud.cleanup_expired_sessions(db)
+    return {
+        "removed": removed,
+        "sessions_removed": sessions_removed,
+        "message": f"Removed {removed} expired job(s) and {sessions_removed} expired session(s).",
+    }
 
 @router.get("/results/{job_id}/export/pdf")
 def export_pdf(job_id: str, db: DBSession = Depends(get_db)):
@@ -513,7 +579,7 @@ def export_pdf(job_id: str, db: DBSession = Depends(get_db)):
         logger.error(f"PDF generation failed for job {job_id}: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"PDF generation failed: {str(e)}")
 
-    safe_filename = job.filename.replace('.csv', '').replace(' ', '_')
+    safe_filename = _re.sub(r'[^\w\-]', '_', job.filename.replace('.csv', ''))
     filename = f"datasense_report_{safe_filename}.pdf"
 
     return StreamingResponse(

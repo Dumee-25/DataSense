@@ -1,15 +1,16 @@
 import os
+import logging
 from sqlalchemy import create_engine
-from sqlalchemy.ext.declarative import declarative_base
-from sqlalchemy.orm import sessionmaker
+from sqlalchemy.orm import declarative_base, sessionmaker
 from dotenv import load_dotenv
 
 load_dotenv()
+logger = logging.getLogger(__name__)
 
-DATABASE_URL = os.getenv(
-    "DATABASE_URL",
-    "postgresql://datasense_user:datasense123@localhost:5432/datasense"
-)
+DATABASE_URL = os.getenv("DATABASE_URL", "")
+if not DATABASE_URL:
+    logger.warning("DATABASE_URL not set — using development default. DO NOT USE IN PRODUCTION.")
+    DATABASE_URL = "postgresql://datasense_user:datasense123@localhost:5432/datasense"
 
 engine = create_engine(
     DATABASE_URL,

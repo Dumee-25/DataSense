@@ -1,4 +1,4 @@
-﻿const BASE = "/api"
+﻿const BASE = process.env.NEXT_PUBLIC_API_BASE || "/api"
 
 export interface JobStatus {
   job_id: string
@@ -102,7 +102,9 @@ export interface FullResults {
 export interface AuthUser { id: string; email: string; name?: string; role: string; created_at: string }
 
 async function call(path: string, opts?: RequestInit) {
-  const res = await fetch(`${BASE}${path}`, { credentials: "include", ...opts })
+  const headers = new Headers(opts?.headers)
+  headers.set("X-DataSense-Request", "1")
+  const res = await fetch(`${BASE}${path}`, { credentials: "include", ...opts, headers })
   if (!res.ok) { const e = await res.json().catch(() => ({})); throw new Error(e.detail || `Request failed (${res.status})`) }
   return res
 }

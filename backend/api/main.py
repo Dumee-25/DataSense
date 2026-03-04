@@ -32,6 +32,27 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.error(f"PostgreSQL connection failed: {e}")
 
+    # Recover orphaned jobs from previous crash/restart (#23)
+    try:
+        from database.connection import SessionLocal
+        from database.models import Job, JobStatus
+        db = SessionLocal()
+        try:
+            orphaned = db.query(Job).filter(
+                Job.status.in_([JobStatus.queued, JobStatus.processing])
+            ).all()
+            for job in orphaned:
+                job.status = JobStatus.failed
+                job.error = "Server restarted during processing."
+                job.error_type = "server_restart"
+            if orphaned:
+                db.commit()
+                logger.info(f"Recovered {len(orphaned)} orphaned job(s)")
+        finally:
+            db.close()
+    except Exception as e:
+        logger.error(f"Orphaned job recovery failed: {e}")
+
     yield
 
     logger.info("DataSense API shutting down...")
@@ -55,6 +76,18 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# CSRF protection — require custom header on mutation requests (#20)
+ENABLE_CSRF = os.getenv("ENABLE_CSRF", "true").lower() == "true"
+
+@app.middleware("http")
+async def csrf_protection(request, call_next):
+    """Require X-DataSense-Request header on mutations to prevent CSRF."""
+    if ENABLE_CSRF and request.method in ("POST", "PUT", "PATCH", "DELETE"):
+        if not request.headers.get("x-datasense-request"):
+            from starlette.responses import JSONResponse
+            return JSONResponse(status_code=403, content={"detail": "CSRF validation failed."})
+    return await call_next(request)
 
 # Register routes
 from api.routes import router

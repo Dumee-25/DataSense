@@ -22,15 +22,27 @@ export default function ProgressPage() {
 
   useEffect(() => {
     if (!jobId) return
+    let cancelled = false
+    let errorCount = 0
+    const MAX_ERRORS = 20
+
     const poll = async () => {
+      if (cancelled) return
       try {
         const s = await fetchJobStatus(jobId)
+        if (cancelled) return
+        errorCount = 0
         setJob(s)
         if (s.status === "completed") { setTimeout(() => router.push(`/results/${jobId}`), 500); return }
         if (s.status !== "failed" && s.status !== "cancelled") setTimeout(poll, 1500)
-      } catch { setTimeout(poll, 3000) }
+      } catch {
+        errorCount++
+        if (!cancelled && errorCount < MAX_ERRORS) setTimeout(poll, 3000)
+        else if (!cancelled) setJob(prev => prev ? { ...prev, status: "failed" as const, error: "Lost connection to server." } : null)
+      }
     }
     poll()
+    return () => { cancelled = true }
   }, [jobId, router])
 
   const handleCancel = async () => { setCancel(true); await cancelAnalysis(jobId); router.push("/") }
