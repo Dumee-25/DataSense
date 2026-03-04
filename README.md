@@ -1,7 +1,7 @@
 # DataSense
 
-**AI-powered data analysis and consulting platform.**
-Upload a CSV. Get expert-level structural, statistical, and ML-ready insights — enhanced by LLMs — in seconds.
+**AI-powered data analysis platform.**
+Upload a CSV. Get clear, actionable insights about your data — what's good, what needs fixing, and what model to use — in seconds.
 
 ![Python](https://img.shields.io/badge/Python-3.11+-3776AB?logo=python&logoColor=white)
 ![FastAPI](https://img.shields.io/badge/FastAPI-0.115-009688?logo=fastapi&logoColor=white)
@@ -33,7 +33,7 @@ Upload a CSV. Get expert-level structural, statistical, and ML-ready insights �
 
 ## Overview
 
-DataSense is a full-stack data analysis platform that turns raw CSV files into actionable, expert-level reports. It combines classical statistical analysis with LLM-enhanced insights to deliver findings that are understandable by both technical and non-technical stakeholders.
+DataSense is a data analysis platform that turns raw CSV files into clear, actionable reports. It runs standard statistical checks on your data, then uses an AI model to explain the findings in plain language anyone can understand.
 
 **Core flow:**
 
@@ -49,37 +49,36 @@ The entire analysis runs as a 7-step background pipeline with real-time progress
 ## Features
 
 ### Data Analysis
-- **Structural profiling** — column types, cardinality, missing values, duplicates, memory usage, data structure detection (time-series, panel, cross-sectional)
-- **Quality auditing** — sentinel value scrubbing, disguised missing values, whitespace issues, mixed types, constant columns, infinite values
-- **Statistical engine** — correlation analysis, outlier detection (IQR-based), distribution profiling (skewness, kurtosis), Simpson's paradox detection, multicollinearity warnings, heteroscedasticity checks, class imbalance detection
-- **ML model recommendations** — scores and ranks classification/regression models based on dataset characteristics, with confidence scores, preprocessing steps, cross-validation strategy, and evaluation metrics
-- **Target column suggestion** — heuristic scoring to identify likely prediction targets
+- **Structural profiling** — detects column types, missing values, duplicates, memory usage, and whether your data is time-series, panel, or a regular table
+- **Quality checks** — finds hidden missing values, whitespace problems, mixed data types, constant columns, and invalid entries
+- **Statistical analysis** — checks which columns are related, finds unusual values (outliers), looks at how data is spread out, detects when patterns reverse in subgroups, and flags when your target column is lopsided
+- **Model recommendations** — suggests the best ML model for your data, with a confidence score, data prep steps, how to test it, and what success looks like
+- **Target column detection** — automatically identifies which column you're most likely trying to predict
 
-### AI / LLM Integration
-- **Multi-provider support** — Ollama (local, default), OpenAI, or Groq
-- **Dataset context inference** — domain, purpose, column meanings, key risks, leakage suspects
-- **Persona system** — tailor insight language for different audiences: `general`, `executive`, `data_scientist`, `product_manager`
-- **Prompt caching** — SHA-256 keyed cache to avoid redundant LLM calls
-- **Graceful degradation** — halves token budget after consecutive timeouts; falls back to rule-based insights if LLM is unavailable
+### AI Integration
+- **Multiple AI providers** — works with Ollama (local, default), OpenAI, or Groq
+- **Dataset understanding** — the AI figures out what your data is about, what the columns mean, and what domain-specific risks to watch for
+- **Audience modes** — switch between `general` (plain language), `executive` (business focus), `data_scientist` (technical), or `product_manager` (product-oriented)
+- **Response caching** — remembers previous AI answers so identical analyses don't re-run
+- **Works without AI** — if no AI provider is available, you still get rule-based insights; if the AI is slow, it automatically adjusts to keep things moving
 
 ### Charts & Visualization
-- **6 auto-generated chart types** — produced from pre-computed results (no raw data re-read), with adaptive rendering for wide datasets
-  - **Data Health Radar** — spider chart scoring completeness, consistency, outlier severity, skewness, and target quality
-  - **Missing Values** — horizontal bar chart of per-column missing percentages
-  - **Correlation** — heatmap for narrow datasets (≤14 columns) or ranked-pairs bar chart for wider ones
-  - **Target Distribution** — class balance bar chart (classification) or histogram with stats overlay (regression)
-  - **Outlier Severity** — grouped bar chart of IQR-based outlier counts per column
-  - **Skewness** — bar chart of skewness values with symmetry band and severity coloring
-- **Self-skipping** — charts return `None` when data is absent or trivial, so the frontend and PDF skip them automatically
-- **PNG output** — rendered at 130 DPI via Matplotlib (Agg backend); served as base64 for the frontend or embedded directly into PDF reports
-- **Individual download** — each chart has a PNG download button in the frontend
+- **6 auto-generated charts** — built from pre-computed results, adapts layout for wide datasets
+  - **Data Health Radar** — overall data quality scores at a glance
+  - **Missing Values** — shows which columns have gaps and how much
+  - **Correlation** — heatmap (small datasets) or bar chart (wide datasets) showing which columns are related
+  - **Target Distribution** — how balanced your target column is
+  - **Outlier Severity** — which columns have unusual values and how many
+  - **Skewness** — how lopsided each column's data distribution is
+- **Smart display** — charts that have no relevant data are automatically hidden
+- **Downloadable** — each chart can be downloaded as a PNG image
 
 ### Platform
-- **Real-time progress** — 7-step pipeline with live percentage updates and step checklist
-- **PDF report export** — professionally designed reports with cover page, severity-coded findings, model recommendations, column profiles, charts, and custom icon illustrations
-- **History** — browse past analyses with metadata (rows, columns, issues, primary model)
-- **Authentication** — optional accounts with seamless anonymous-to-authenticated transition (existing analysis history is preserved on sign-up/login)
-- **Session-based tracking** — anonymous users get a browser session cookie; analyses are tied to sessions and optionally linked to accounts
+- **Real-time progress** — 7-step pipeline with live progress bar and step checklist
+- **PDF report export** — downloadable reports with findings, model recommendations, column details, and charts
+- **History** — browse past analyses with key info (rows, columns, issues, model used)
+- **Authentication** — optional accounts; your analysis history transfers when you sign up
+- **Works without an account** — anonymous users get a session cookie so their analyses are saved
 
 ---
 
@@ -99,21 +98,21 @@ The entire analysis runs as a 7-step background pipeline with real-time progress
 │  Backend (FastAPI + Python)                              │
 │  ┌────────────┐  ┌──────────────────────────────────┐   │
 │  │  Auth       │  │  Analysis Pipeline (Background)   │  │
-│  │  Routes     │  │  1. Validate file                 │  │
-│  │            │  │  2. Load dataset                   │  │
-│  │  Analysis  │  │  3. Structural analysis            │  │
-│  │  Routes    │  │  4. Statistical engine             │  │
-│  │            │  │  5. Model recommendations          │  │
-│  │  PDF Export│  │  6. LLM-enhanced insights          │  │
+│  │  Routes     │  │  1. Check file                     │  │
+│  │            │  │  2. Load data                      │  │
+│  │  Analysis  │  │  3. Examine structure              │  │
+│  │  Routes    │  │  4. Run statistics                 │  │
+│  │            │  │  5. Pick best model                │  │
+│  │  PDF Export│  │  6. AI-powered explanations        │  │
 │  └────────────┘  │  7. Save results                   │  │
 │                   └──────────────────────────────────┘   │
 │                        │                                 │
 └────────────────────────┼─────────────────────────────────┘
                          ▼
 ┌──────────────────┐  ┌────────────────────────────────────┐
-│  PostgreSQL      │  │  LLM Provider                      │
-│  UUID PKs        │  │  • Ollama (local, default)          │
-│  JSONB results   │  │  • OpenAI (gpt-4o-mini)            │
+│  PostgreSQL      │  │  AI Provider                        │
+│  Stores results  │  │  • Ollama (local, default)          │
+│  as JSON         │  │  • OpenAI (gpt-4o-mini)            │
 │                  │  │  • Groq (llama-3.1-8b-instant)     │
 └──────────────────┘  └────────────────────────────────────┘
 ```
@@ -126,12 +125,12 @@ The entire analysis runs as a 7-step background pipeline with real-time progress
 | ------------ | ------------------------------------------------------- |
 | **Frontend** | Next.js 14, React 18, TypeScript 5, Tailwind CSS 3      |
 | **Backend**  | FastAPI 0.115, Python 3.11+, SQLAlchemy 2.0, Alembic    |
-| **Database** | PostgreSQL (UUID primary keys, JSONB for analysis results) |
-| **AI / LLM** | Ollama (local), OpenAI, or Groq — configurable          |
+| **Database** | PostgreSQL (stores results as structured JSON)              |
+| **AI**       | Ollama (local), OpenAI, or Groq — configurable          |
 | **Analysis** | Pandas 2.2, SciPy 1.13, scikit-learn 1.5               |
-| **Charts**   | Matplotlib 3.10 (Agg backend, PNG output at 130 DPI)    |
+| **Charts**   | Matplotlib 3.10                                         |
 | **PDF**      | ReportLab 4.2                                           |
-| **Auth**     | JWT (python-jose) + bcrypt (passlib), httponly cookies   |
+| **Auth**     | JWT + bcrypt, httponly cookies                           |
 
 ---
 
@@ -221,14 +220,15 @@ OPENAI_API_KEY=sk-...
 GROQ_API_KEY=gsk_...
 
 # LLM Tuning
-LLM_TIMEOUT=30
+LLM_TIMEOUT=60
+LLM_BATCH_TIMEOUT=90
 LLM_MAX_WORKERS=2
 TOKEN_BUDGET=4096
 
 # Insight persona: "general" (default), "executive", "data_scientist", "product_manager"
 INSIGHT_PERSONA=general
 
-# Analysis toggle — set to false to skip LLM calls and use rule-based insights only
+# Set to false to skip AI calls and use rule-based insights only
 USE_LLM=true
 ```
 
@@ -240,7 +240,7 @@ USE_LLM=true
 | **OpenAI** | Set `LLM_PROVIDER=openai` and provide `OPENAI_API_KEY`               |
 | **Groq**   | Set `LLM_PROVIDER=groq` and provide `GROQ_API_KEY`                   |
 
-If no LLM provider is available, DataSense falls back gracefully to rule-based insights.
+If no AI provider is available, DataSense still works — you get rule-based insights without the AI explanations.
 
 ---
 
@@ -249,12 +249,12 @@ If no LLM provider is available, DataSense falls back gracefully to rule-based i
 1. **Upload** — Drag and drop a CSV file (up to 50 MB) on the home page.
 2. **Analyze** — Watch the 7-step pipeline process your data in real time.
 3. **Explore results** — Browse findings across six tabs:
-   - **Summary** — executive overview, data story, domain context, quick wins, severity breakdown
-   - **Findings** — expandable cards with severity, action priority, business impact, model context, and AI deep dives
-   - **Charts** — data health radar, missing values, correlations, target distribution, outliers, skewness (with PNG download)
-   - **Relations** — column correlations, Simpson's paradox, class imbalance guidance with code hints
-   - **Model** — recommended ML model with confidence, alternatives, preprocessing steps, and validation strategy
-   - **Columns** — detailed profile of every column (type, missing %, unique count, notes)
+   - **Summary** — overview of your data, key story, quick wins, and how many issues were found
+   - **Findings** — expandable cards for each issue with what's wrong, why it matters, and how to fix it
+   - **Charts** — 6 visual charts covering data health, missing values, correlations, target balance, outliers, and skewness
+   - **Relations** — how columns relate to each other, plus guidance on class imbalance if relevant
+   - **Model** — which ML model to use, why, alternatives, data prep steps, and how to test it
+   - **Columns** — profile of every column (type, missing %, unique values, notes)
 4. **Export** — Download a professionally formatted PDF report.
 5. **History** — Revisit past analyses from the History page. Sign in to preserve history across devices.
 
@@ -295,29 +295,29 @@ If no LLM provider is available, DataSense falls back gracefully to rule-based i
 datasense/
 ├── backend/
 │   ├── api/
-│   │   ├── main.py              # FastAPI app, CORS, lifespan, route mounting
+│   │   ├── main.py              # App setup, startup, route registration
 │   │   ├── routes.py            # Analysis endpoints, background pipeline
-│   │   └── auth_routes.py       # Authentication endpoints
+│   │   └── auth_routes.py       # Login/register endpoints
 │   ├── core/
-│   │   ├── structural_analyzer.py   # Dataset structure & quality profiling
-│   │   ├── statistical_engine.py    # Correlations, outliers, distributions, red flags
-│   │   ├── model_recommender.py     # ML model scoring & recommendations
-│   │   ├── insight_generator.py     # LLM-enhanced insight engine
-│   │   ├── deterministic_summary.py # LLM-safe digest builder (no raw data to LLM)
-│   │   ├── aggregation_engine.py    # Groups duplicate/similar findings
-│   │   ├── relevance_filter.py      # Contextualizes findings for recommended model
-│   │   ├── chart_engine.py          # Matplotlib chart generation (6 chart types)
-│   │   └── pdf_generator.py         # ReportLab PDF report generation
+│   │   ├── structural_analyzer.py   # Detects column types, missing data, duplicates
+│   │   ├── statistical_engine.py    # Finds correlations, outliers, data patterns
+│   │   ├── model_recommender.py     # Picks the best ML model for the data
+│   │   ├── insight_generator.py     # AI-powered plain-language explanations
+│   │   ├── deterministic_summary.py # Prepares computed facts for the AI (no raw data sent)
+│   │   ├── aggregation_engine.py    # Groups similar findings together
+│   │   ├── relevance_filter.py      # Adjusts findings based on the recommended model
+│   │   ├── chart_engine.py          # Generates the 6 analysis charts
+│   │   └── pdf_generator.py         # Creates downloadable PDF reports
 │   ├── database/
-│   │   ├── connection.py        # SQLAlchemy engine & session
-│   │   ├── models.py            # User, Session, Job, Result, DatasetMetadata
-│   │   ├── crud.py              # Job & result CRUD operations
-│   │   ├── auth_crud.py         # User & session CRUD operations
-│   │   └── migrations/          # Alembic migrations
+│   │   ├── connection.py        # Database connection setup
+│   │   ├── models.py            # Database tables: users, sessions, jobs, results
+│   │   ├── crud.py              # Job & result create/read/update/delete
+│   │   ├── auth_crud.py         # User & session create/read/update/delete
+│   │   └── migrations/          # Database schema migrations
 │   ├── utils/
-│   │   ├── auth.py              # JWT & bcrypt helpers
-│   │   ├── data_validator.py    # Pre-pipeline file validation
-│   │   └── dependencies.py      # FastAPI dependency injection
+│   │   ├── auth.py              # Login token & password helpers
+│   │   ├── data_validator.py    # Checks uploaded files before analysis
+│   │   └── dependencies.py      # Shared request helpers
 │   ├── requirements.txt
 │   └── alembic.ini
 ├── frontend/
@@ -326,15 +326,15 @@ datasense/
 │   │   │   ├── page.tsx             # Upload / landing page
 │   │   │   ├── layout.tsx           # Root layout
 │   │   │   ├── globals.css          # Global styles
-│   │   │   ├── analyzing/[jobId]/   # Real-time progress page
+│   │   │   ├── analyzing/[jobId]/   # Live progress page
 │   │   │   ├── results/[jobId]/     # Results dashboard (6 tabs)
-│   │   │   └── history/             # Analysis history
+│   │   │   └── history/             # Past analyses
 │   │   ├── components/
 │   │   │   ├── NavBar.tsx           # Top navigation bar
 │   │   │   └── AuthModal.tsx        # Login / register modal
 │   │   └── lib/
 │   │       └── datasense-api.ts     # Typed API client
-│   ├── next.config.js               # API proxy rewrites
+│   ├── next.config.js               # Routes API calls to the backend
 │   ├── tailwind.config.js
 │   ├── tsconfig.json
 │   └── package.json
