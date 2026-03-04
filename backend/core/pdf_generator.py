@@ -840,6 +840,11 @@ class PDFReportGenerator:
             aspect = h_px / w_px
             w = min(max_width, w_px / 130 * 72)   # convert at 130dpi → points
             h = w * aspect
+            # Cap height to fit within the page frame (leave room for title + caption)
+            max_height = PAGE_H - 2 * MARGIN - 60  # 60 pt headroom for header/caption
+            if h > max_height:
+                h = max_height
+                w = h / aspect
             # Fresh, independent buffer for ReportLab
             img = Image(_io.BytesIO(png_bytes), width=w, height=h)
             return img
