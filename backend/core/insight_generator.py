@@ -459,9 +459,9 @@ class InsightGenerator:
         # We deduplicate so we never emit two flags for the same column.
         if self._context and self._context.leakage_suspects:
             already_flagged = {i.get('column') for i in all_issues if i.get('type') == 'data_leakage_risk'}
-            tgt = (blueprint.get('target_candidates') or [{}])[0].get('column', '')
+            _all_targets = {t.get('column') for t in blueprint.get('target_candidates', [])}
             for col in self._context.leakage_suspects:
-                if col not in already_flagged and col != tgt and col in {
+                if col not in already_flagged and col not in _all_targets and col in {
                     p['name'] for p in blueprint.get('column_profiles', [])
                 }:
                     meaning = self._context.column_meanings.get(col, col)
@@ -488,11 +488,11 @@ class InsightGenerator:
         # "RUN_4B", "PLATE_NO", "ASSAY_ID", or "OPERATOR_CODE_7".
         if self._context and self._context.metadata_cols:
             known_cols = {p['name'] for p in blueprint.get('column_profiles', [])}
-            tgt = (blueprint.get('target_candidates') or [{}])[0].get('column', '')
+            _all_targets = {t.get('column') for t in blueprint.get('target_candidates', [])}
             already_flagged = {i.get('column') for i in all_issues
                                if i.get('type') in ('data_leakage_risk', 'metadata_leakage')}
             for col in self._context.metadata_cols:
-                if col not in known_cols or col == tgt or col in already_flagged:
+                if col not in known_cols or col in _all_targets or col in already_flagged:
                     continue
                 meaning = self._context.column_meanings.get(col, col)
                 all_issues.append({
@@ -896,8 +896,8 @@ JSON schema (return ONLY this, no other text):
   "target_meaning": "plain English: what predicting the target means — name the actual classes/values, do NOT invent meanings",
   "column_meanings": {{"col": "brief meaning", ...}},
   "key_risks": ["up to 3 domain-specific data quality risks"],
-  "leakage_suspects": ["cols with POST-EVENT data unavailable at prediction time — [] if none"],
-  "metadata_cols": ["cols that are collection artefacts: batch IDs, machine codes, run numbers, operator IDs, ETL timestamps — [] if none"],
+  "leakage_suspects": ["cols with POST-EVENT data unavailable at prediction time — NEVER include the target column here — [] if none"],
+  "metadata_cols": ["cols that are ONLY collection artefacts: batch IDs, machine codes, run numbers, operator IDs, ETL timestamps — NEVER include target columns or meaningful features here — [] if none"],
   "confidence": 0.0
 }}"""
         # max_tokens raised from 350 → 550: the richer column snapshot + longer class lists
@@ -908,14 +908,21 @@ JSON schema (return ONLY this, no other text):
         if not raw or not isinstance(raw, dict):
             logger.info("Context inference returned nothing — proceeding without domain context")
             return DatasetContext()
+
+        # ── Safety: strip target columns from leakage/metadata lists ──────────
+        # LLMs frequently misclassify the target as a "post-event" or "artefact"
+        # column (e.g. "Survived" in Titanic, "Churn" in telecom).
+        _target_set = {t['column'] for t in target_candidates}
         ctx = DatasetContext(
             domain=raw.get('domain', 'unknown'),
             purpose=raw.get('purpose', ''),
             column_meanings=raw.get('column_meanings', {}),
             target_meaning=raw.get('target_meaning', ''),
             key_risks=raw.get('key_risks', []),
-            leakage_suspects=[c for c in raw.get('leakage_suspects', []) if isinstance(c, str)],
-            metadata_cols=[c for c in raw.get('metadata_cols', []) if isinstance(c, str)],
+            leakage_suspects=[c for c in raw.get('leakage_suspects', [])
+                              if isinstance(c, str) and c not in _target_set],
+            metadata_cols=[c for c in raw.get('metadata_cols', [])
+                           if isinstance(c, str) and c not in _target_set],
             confidence=float(raw.get('confidence', 0.0)),
         )
         logger.info(f"Domain context inferred: {ctx.domain} (confidence={ctx.confidence:.2f})")

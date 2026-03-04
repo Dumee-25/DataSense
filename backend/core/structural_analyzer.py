@@ -7,7 +7,11 @@ _DISGUISED_MISSING = {
 }
 _ID_KW = ('id', 'key', 'code', 'uuid', 'guid')
 _TARGET_KW = ('target', 'label', 'class', 'output', 'result', 'outcome',
-              'churn', 'fraud', 'default', 'price', 'sales', 'revenue', 'score', 'rating', 'y')
+              'churn', 'fraud', 'default', 'price', 'sales', 'revenue', 'score', 'rating', 'y',
+              'surviv', 'diagnosis', 'status', 'approved', 'accept', 'reject',
+              'spam', 'sentiment', 'category', 'species', 'quality', 'risk',
+              'severity', 'grade', 'pass', 'fail', 'positive', 'negative',
+              'attrition', 'readmit', 'clicked', 'purchased', 'converted')
 
 # Fix 1: Common numeric sentinel/placeholder values used by legacy databases,
 # scientific instruments, and enterprise ETL systems to represent "missing".
