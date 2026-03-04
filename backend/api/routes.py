@@ -339,23 +339,28 @@ async def upload_and_analyze(
         user_id=session.user_id,
     )
 
-    # Check file size before writing to disk (#5)
-    file.file.seek(0, 2)
-    file_size_bytes = file.file.tell()
-    file.file.seek(0)
-    if file_size_bytes > MAX_FILE_SIZE_MB * 1024 * 1024:
-        crud.delete_job(db, job_id)
-        raise HTTPException(status_code=413, detail=f"File too large. Maximum is {MAX_FILE_SIZE_MB} MB.")
-
-    # Save uploaded file to temp directory
+    # Save uploaded file to temp directory, checking size along the way (#5)
     os.makedirs(TEMP_UPLOAD_DIR, exist_ok=True)
     file_path = os.path.join(TEMP_UPLOAD_DIR, f"{job_id}.csv")
+    max_bytes = MAX_FILE_SIZE_MB * 1024 * 1024
     try:
+        total_written = 0
         with open(file_path, "wb") as buffer:
-            shutil.copyfileobj(file.file, buffer)
+            while chunk := await file.read(1024 * 1024):  # 1 MB chunks
+                total_written += len(chunk)
+                if total_written > max_bytes:
+                    break
+                buffer.write(chunk)
     except Exception as e:
+        if os.path.exists(file_path):
+            os.remove(file_path)
         crud.delete_job(db, job_id)
-        raise HTTPException(status_code=500, detail=f"Failed to save file: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Failed to save file: {_sanitize_error(str(e))}")
+
+    if total_written > max_bytes:
+        os.remove(file_path)
+        crud.delete_job(db, job_id)
+        raise HTTPException(status_code=413, detail=f"File too large. Maximum is {MAX_FILE_SIZE_MB} MB.")
 
     # Kick off background pipeline
     background_tasks.add_task(

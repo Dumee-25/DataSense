@@ -104,8 +104,20 @@ export interface AuthUser { id: string; email: string; name?: string; role: stri
 async function call(path: string, opts?: RequestInit) {
   const headers = new Headers(opts?.headers)
   headers.set("X-DataSense-Request", "1")
-  const res = await fetch(`${BASE}${path}`, { credentials: "include", ...opts, headers })
-  if (!res.ok) { const e = await res.json().catch(() => ({})); throw new Error(e.detail || `Request failed (${res.status})`) }
+  let res: Response
+  try {
+    res = await fetch(`${BASE}${path}`, { credentials: "include", ...opts, headers })
+  } catch {
+    throw new Error("Network error — is the server running?")
+  }
+  if (!res.ok) {
+    const e = await res.json().catch(() => null)
+    if (e?.detail) throw new Error(e.detail)
+    if (res.status === 413) throw new Error("File too large. Try a smaller file.")
+    if (res.status === 403) throw new Error("Request blocked (CSRF). Please refresh and try again.")
+    if (res.status === 429) throw new Error("Server busy. Please wait a moment and try again.")
+    throw new Error(`Request failed (${res.status})`)
+  }
   return res
 }
 
