@@ -117,9 +117,20 @@ export const uploadCSV = async (file: File, context?: string, targetColumn?: str
 export const fetchJobStatus  = (id: string): Promise<JobStatus>   => call(`/status/${id}`).then(r => r.json())
 export const fetchResults    = (id: string): Promise<FullResults>  => call(`/results/${id}`).then(r => r.json())
 export const cancelAnalysis  = (id: string) => call(`/cancel/${id}`, { method: "DELETE" })
-export const fetchHistory    = (): Promise<{ total: number; jobs: HistoryJob[] }> => call("/jobs").then(r => r.json()).catch(() => ({ total: 0, jobs: [] }))
+export const fetchHistory    = (): Promise<{ total: number; jobs: HistoryJob[] }> => call("/jobs").then(r => r.json())
 export const removeJob       = (id: string) => call(`/jobs/${id}`, { method: "DELETE" })
-export const pdfDownloadUrl  = (id: string) => `${BASE}/results/${id}/export/pdf`
+export const downloadPdf = async (id: string) => {
+  const res = await call(`/results/${id}/export/pdf`)
+  const blob = await res.blob()
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement("a")
+  a.href = url
+  a.download = `datasense-report-${id}.pdf`
+  document.body.appendChild(a)
+  a.click()
+  a.remove()
+  URL.revokeObjectURL(url)
+}
 export const fetchCharts    = (id: string): Promise<ChartData> => call(`/results/${id}/charts`).then(r => r.json()).catch(() => ({ job_id: id, charts: {} }))
 
 export const fetchCurrentUser = (): Promise<{ user: AuthUser | null; authenticated: boolean }> =>

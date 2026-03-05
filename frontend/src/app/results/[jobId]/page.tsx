@@ -2,7 +2,7 @@
 import { useEffect, useState } from "react"
 import { useParams, useRouter } from "next/navigation"
 import NavBar from "@/components/NavBar"
-import { fetchResults, fetchCharts, pdfDownloadUrl, FullResults, Insight, ChartData, DomainContext } from "@/lib/datasense-api"
+import { fetchResults, fetchCharts, downloadPdf, FullResults, Insight, ChartData, DomainContext } from "@/lib/datasense-api"
 
 type Tab = "summary" | "findings" | "charts" | "relations" | "model" | "columns"
 
@@ -214,6 +214,7 @@ export default function ResultsPage() {
   const router    = useRouter()
   const [data, setData]       = useState<FullResults | null>(null)
   const [loading, setLoading] = useState(true)
+  const [error, setError]     = useState<string | null>(null)
   const [tab, setTab]         = useState<Tab>("summary")
   const [sevFilter, setSevFilter] = useState<Record<string,boolean>>({ critical: true, high: true, medium: true })
   const [corrThreshold, setCorrThreshold] = useState(0.0)
@@ -221,7 +222,9 @@ export default function ResultsPage() {
   const [chartsLoading, setChartsLoading] = useState(false)
 
   useEffect(() => {
-    fetchResults(jobId).then(r => { setData(r); setLoading(false) }).catch(() => router.push("/"))
+    fetchResults(jobId)
+      .then(r => { setData(r); setLoading(false) })
+      .catch(err => { setError(err.message || "Failed to load results"); setLoading(false) })
   }, [jobId, router])
 
   // Lazy-load charts when the tab is first selected
@@ -236,6 +239,14 @@ export default function ResultsPage() {
     <div className="min-h-screen flex items-center justify-center" style={{ background: "var(--bg)" }}>
       <div className="w-8 h-8 rounded-full border-2 animate-spin"
         style={{ borderColor: "var(--teal)", borderTopColor: "transparent" }} />
+    </div>
+  )
+  if (error) return (
+    <div className="min-h-screen flex flex-col items-center justify-center gap-4" style={{ background: "var(--bg)" }}>
+      <p className="text-lg font-semibold" style={{ color: "var(--critical)" }}>Failed to load results</p>
+      <p className="text-sm" style={{ color: "var(--muted)" }}>{error}</p>
+      <button onClick={() => router.push("/")} className="px-4 py-2 rounded-xl text-sm font-semibold"
+        style={{ background: "var(--teal)", color: "#070D1A" }}>← Back to Home</button>
     </div>
   )
   if (!data) return null
@@ -298,11 +309,11 @@ export default function ResultsPage() {
               style={{ background: "var(--surface)", color: "var(--dim)", border: "1px solid var(--border)" }}>
               ↑ New
             </button>
-            <a href={pdfDownloadUrl(jobId)} target="_blank" rel="noopener noreferrer"
+            <button onClick={() => downloadPdf(jobId).catch(() => alert("Failed to download PDF"))}
               className="px-4 py-2 rounded-xl text-sm font-semibold"
               style={{ background: "var(--teal)", color: "#070D1A", fontFamily: "Syne, sans-serif" }}>
               ↓ PDF
-            </a>
+            </button>
           </div>
         </div>
 

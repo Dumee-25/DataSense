@@ -21,9 +21,14 @@ export default function HistoryPage() {
   const router = useRouter()
   const [jobs, setJobs]       = useState<HistoryJob[]>([])
   const [loading, setLoading] = useState(true)
+  const [error, setError]     = useState<string | null>(null)
   const [removing, setRemoving] = useState<string|null>(null)
 
-  useEffect(() => { fetchHistory().then(r => { setJobs(r.jobs); setLoading(false) }) }, [])
+  useEffect(() => {
+    fetchHistory()
+      .then(r => { setJobs(r.jobs); setLoading(false) })
+      .catch(err => { setError(err.message || "Failed to load history"); setLoading(false) })
+  }, [])
 
   const del = async (id: string, e: React.MouseEvent) => {
     e.stopPropagation()
@@ -64,6 +69,14 @@ export default function HistoryPage() {
         {loading ? (
           <div className="flex justify-center py-20">
             <div className="w-8 h-8 rounded-full border-2 animate-spin" style={{ borderColor: "var(--teal)", borderTopColor: "transparent" }} />
+          </div>
+        ) : error ? (
+          <div className="text-center py-20 fade-up">
+            <p className="text-5xl mb-3">⚠️</p>
+            <p className="font-semibold mb-1" style={{ fontFamily: "Syne, sans-serif", color: "var(--critical)" }}>Could not load history</p>
+            <p className="text-sm mb-5" style={{ color: "var(--muted)" }}>{error}</p>
+            <button onClick={() => window.location.reload()} className="px-5 py-2.5 rounded-xl font-semibold text-sm"
+              style={{ background: "var(--teal)", color: "#070D1A" }}>Retry</button>
           </div>
         ) : jobs.length === 0 ? (
           <div className="text-center py-20 fade-up">
