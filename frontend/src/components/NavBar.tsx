@@ -9,7 +9,19 @@ export default function NavBar() {
   const [showAuth, setShowAuth] = useState<false | "login" | "register">(false)
   const [showMenu, setShowMenu] = useState(false)
 
-  useEffect(() => { fetchCurrentUser().then(r => setUser(r.user)) }, [])
+  useEffect(() => {
+    let cancelled = false
+    const check = (retries = 2) => {
+      fetchCurrentUser()
+        .then(r => { if (!cancelled) setUser(r.user) })
+        .catch(() => {
+          // Transient error (429, network) — retry instead of clearing the user
+          if (!cancelled && retries > 0) setTimeout(() => check(retries - 1), 2000)
+        })
+    }
+    check()
+    return () => { cancelled = true }
+  }, [])
 
   const handleSignOut = async () => { await signOut(); setUser(null); setShowMenu(false) }
 

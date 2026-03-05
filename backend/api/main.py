@@ -43,8 +43,17 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
-# CORS — allow frontend dev server
-app.add_middleware(
+# ── Middleware stack ──────────────────────────────────────────────────────────
+# Starlette executes middleware in reverse order of addition (last-added = outermost).
+# We need CORS outermost so that *every* response (including 429 rate-limit
+# responses) gets the correct Access-Control-* headers.  Without this the browser
+# blocks 429s as opaque CORS errors and the frontend can't distinguish "rate
+# limited" from "not authenticated".
+
+from utils.rate_limiter import RateLimitMiddleware
+app.add_middleware(RateLimitMiddleware)          # inner — runs second
+
+app.add_middleware(                                # outer — runs first
     CORSMiddleware,
     allow_origins=[
         "http://localhost:3000",
@@ -53,11 +62,9 @@ app.add_middleware(
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
+    expose_headers=["Content-Disposition", "X-RateLimit-Limit",
+                    "X-RateLimit-Remaining", "Retry-After"],
 )
-
-# Rate limiting — must be added after CORS so headers are present
-from utils.rate_limiter import RateLimitMiddleware
-app.add_middleware(RateLimitMiddleware)
 
 # Register routes
 from api.routes import router

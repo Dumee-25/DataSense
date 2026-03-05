@@ -4,6 +4,7 @@ import math
 import shutil
 import logging
 import threading
+import base64
 from datetime import datetime, timezone
 from typing import Optional
 

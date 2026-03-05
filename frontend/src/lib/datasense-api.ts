@@ -101,9 +101,21 @@ export interface FullResults {
 
 export interface AuthUser { id: string; email: string; name?: string; role: string; created_at: string }
 
+class ApiError extends Error {
+  status: number
+  constructor(message: string, status: number) {
+    super(message)
+    this.name = "ApiError"
+    this.status = status
+  }
+}
+
 async function call(path: string, opts?: RequestInit) {
   const res = await fetch(`${BASE}${path}`, { credentials: "include", ...opts })
-  if (!res.ok) { const e = await res.json().catch(() => ({})); throw new Error(e.detail || `Request failed (${res.status})`) }
+  if (!res.ok) {
+    const e = await res.json().catch(() => ({}))
+    throw new ApiError(e.detail || `Request failed (${res.status})`, res.status)
+  }
   return res
 }
 
@@ -120,8 +132,14 @@ export const cancelAnalysis  = (id: string) => call(`/cancel/${id}`, { method: "
 export const fetchHistory    = (): Promise<{ total: number; jobs: HistoryJob[] }> => call("/jobs").then(r => r.json())
 export const removeJob       = (id: string) => call(`/jobs/${id}`, { method: "DELETE" })
 export const downloadPdf = async (id: string) => {
-  const res = await call(`/results/${id}/export/pdf`)
+  // Use a direct fetch with longer timeout tolerance — PDF generation can be slow
+  const res = await fetch(`${BASE}/results/${id}/export/pdf`, { credentials: "include" })
+  if (!res.ok) {
+    const e = await res.json().catch(() => ({}))
+    throw new Error(e.detail || `PDF download failed (${res.status})`)
+  }
   const blob = await res.blob()
+  if (blob.size === 0) throw new Error("Generated PDF was empty")
   const url = URL.createObjectURL(blob)
   const a = document.createElement("a")
   a.href = url
@@ -131,10 +149,27 @@ export const downloadPdf = async (id: string) => {
   a.remove()
   URL.revokeObjectURL(url)
 }
-export const fetchCharts    = (id: string): Promise<ChartData> => call(`/results/${id}/charts`).then(r => r.json()).catch(() => ({ job_id: id, charts: {} }))
+export const fetchCharts    = (id: string): Promise<ChartData> => call(`/results/${id}/charts`).then(r => r.json())
 
-export const fetchCurrentUser = (): Promise<{ user: AuthUser | null; authenticated: boolean }> =>
-  call("/auth/me").then(r => r.json()).catch(() => ({ user: null, authenticated: false }))
+/**
+ * Fetch current user. Only returns null for genuine "not authenticated" responses.
+ * Network errors and rate-limit (429) responses are re-thrown so the caller can
+ * decide whether to retry rather than assuming the user is logged out.
+ */
+export const fetchCurrentUser = async (): Promise<{ user: AuthUser | null; authenticated: boolean }> => {
+  try {
+    const res = await call("/auth/me")
+    return res.json()
+  } catch (err: any) {
+    // A genuine "not authenticated" API response — user truly isn't logged in
+    if (err instanceof ApiError && (err.status === 401 || err.status === 403)) {
+      return { user: null, authenticated: false }
+    }
+    // Any other error (429, network failure, etc.) — re-throw so the caller
+    // does NOT clear the user state and can retry instead.
+    throw err
+  }
+}
 
 export const signIn = (email: string, password: string) =>
   call("/auth/login", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ email, password }) }).then(r => r.json())

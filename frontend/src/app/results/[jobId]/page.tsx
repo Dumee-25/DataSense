@@ -220,6 +220,8 @@ export default function ResultsPage() {
   const [corrThreshold, setCorrThreshold] = useState(0.0)
   const [charts, setCharts]   = useState<Record<string, string | null>>({})
   const [chartsLoading, setChartsLoading] = useState(false)
+  const [chartsFetched, setChartsFetched] = useState(false)
+  const [chartsError, setChartsError]     = useState<string | null>(null)
 
   useEffect(() => {
     fetchResults(jobId)
@@ -227,13 +229,17 @@ export default function ResultsPage() {
       .catch(err => { setError(err.message || "Failed to load results"); setLoading(false) })
   }, [jobId, router])
 
-  // Lazy-load charts when the tab is first selected
+  // Lazy-load charts when the tab is first selected (single attempt)
   useEffect(() => {
-    if (tab === "charts" && Object.keys(charts).length === 0 && !chartsLoading) {
+    if (tab === "charts" && !chartsFetched && !chartsLoading) {
       setChartsLoading(true)
-      fetchCharts(jobId).then(r => setCharts(r.charts || {})).finally(() => setChartsLoading(false))
+      setChartsError(null)
+      fetchCharts(jobId)
+        .then(r => setCharts(r.charts || {}))
+        .catch(() => setChartsError("Failed to generate charts. You can try again."))
+        .finally(() => { setChartsLoading(false); setChartsFetched(true) })
     }
-  }, [tab, jobId, charts, chartsLoading])
+  }, [tab, jobId, chartsFetched, chartsLoading])
 
   if (loading) return (
     <div className="min-h-screen flex items-center justify-center" style={{ background: "var(--bg)" }}>
@@ -528,6 +534,16 @@ export default function ResultsPage() {
                 <div className="w-8 h-8 rounded-full border-2 animate-spin mx-auto mb-3"
                   style={{ borderColor: "var(--teal)", borderTopColor: "transparent" }} />
                 <p className="text-sm" style={{ color: "var(--muted)" }}>Generating charts…</p>
+              </div>
+            ) : chartsError ? (
+              <div className="text-center py-14" style={{ color: "var(--muted)" }}>
+                <p className="text-4xl mb-2">⚠️</p>
+                <p className="mb-3">{chartsError}</p>
+                <button onClick={() => { setChartsFetched(false); setChartsError(null) }}
+                  className="px-4 py-2 rounded-xl text-sm font-semibold"
+                  style={{ background: "var(--teal)", color: "#070D1A" }}>
+                  Retry
+                </button>
               </div>
             ) : Object.values(charts).every(v => v === null) || Object.keys(charts).length === 0 ? (
               <div className="text-center py-14" style={{ color: "var(--muted)" }}>

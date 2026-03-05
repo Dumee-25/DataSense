@@ -23,15 +23,21 @@ from starlette.responses import JSONResponse
 logger = logging.getLogger(__name__)
 
 # ── Config ────────────────────────────────────────────────────────────────────
-MAX_REQUESTS = int(os.getenv("RATE_LIMIT_REQUESTS", "60"))
+MAX_REQUESTS = int(os.getenv("RATE_LIMIT_REQUESTS", "200"))
 WINDOW_SECONDS = int(os.getenv("RATE_LIMIT_WINDOW_S", "60"))
 
-# Stricter limit for expensive endpoints (upload / auth)
+# Stricter limit for expensive endpoints (upload / auth mutations)
 STRICT_MAX_REQUESTS = int(os.getenv("RATE_LIMIT_STRICT_REQUESTS", "10"))
 STRICT_WINDOW_SECONDS = int(os.getenv("RATE_LIMIT_STRICT_WINDOW_S", "60"))
 
 # Paths that get the stricter limit
 _STRICT_PATHS = {"/api/analyze", "/api/auth/login", "/api/auth/register"}
+
+# Paths completely exempt from rate limiting (lightweight reads, auth checks)
+_EXEMPT_PATHS = {"/api/auth/me", "/health"}
+
+# Path prefixes exempt from rate limiting (high-frequency polling)
+_EXEMPT_PREFIXES = ("/api/status/",)
 
 # ── Storage ───────────────────────────────────────────────────────────────────
 _lock = threading.Lock()
@@ -84,8 +90,18 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
     """Drop-in FastAPI middleware that enforces per-IP rate limits."""
 
     async def dispatch(self, request: Request, call_next) -> Response:
+        # Never rate-limit CORS preflight requests — browsers send OPTIONS
+        # before every cross-origin request and blocking them causes opaque
+        # failures that look like random logouts or request blocks.
+        if request.method == "OPTIONS":
+            return await call_next(request)
+
         ip = _get_client_ip(request)
         path = request.url.path.rstrip("/")
+
+        # Exempt lightweight / high-frequency endpoints from rate limiting
+        if path in _EXEMPT_PATHS or any(path.startswith(p) for p in _EXEMPT_PREFIXES):
+            return await call_next(request)
 
         # Choose limit tier
         if path in _STRICT_PATHS:
