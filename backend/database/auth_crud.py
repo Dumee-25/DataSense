@@ -6,6 +6,10 @@ from sqlalchemy.orm import Session as DBSession
 from database.models import User, Job, UserRole
 from utils.auth import hash_password, verify_password
 
+def _utcnow() -> datetime:
+    """Timezone-naive UTC now — compatible with SQLAlchemy DateTime columns."""
+    return datetime.now(timezone.utc).replace(tzinfo=None)
+
 
 def get_user_by_email(db: DBSession, email: str) -> Optional[User]:
     return db.query(User).filter(User.email == email.lower().strip()).first()
@@ -42,7 +46,7 @@ def authenticate_user(db: DBSession, email: str, password: str) -> Optional[User
     if not user.is_active:
         return None
     # Update last login
-    user.last_login = datetime.now(timezone.utc)
+    user.last_login = _utcnow()
     db.commit()
     return user
 

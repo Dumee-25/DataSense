@@ -7,6 +7,10 @@ import threading
 from datetime import datetime, timezone
 from typing import Optional
 
+def _utcnow() -> datetime:
+    """Timezone-naive UTC now — compatible with SQLAlchemy DateTime columns."""
+    return datetime.now(timezone.utc).replace(tzinfo=None)
+
 import pandas as pd
 from fastapi import APIRouter, UploadFile, File, Form, BackgroundTasks, HTTPException, Query, Depends, Cookie, Response
 from sqlalchemy.orm import Session as DBSession
@@ -67,7 +71,7 @@ def run_pipeline(job_id: str, file_path: str, user_context: str = "",
     from database.connection import SessionLocal
 
     db = SessionLocal()
-    start_time = datetime.now(timezone.utc)
+    start_time = _utcnow()
 
     # ── Guard: check if cancelled before claiming a slot ───────────────
     job = crud.get_job(db, job_id)
@@ -212,7 +216,7 @@ def run_pipeline(job_id: str, file_path: str, user_context: str = "",
             recommendations=clean_recs,
         )
 
-        elapsed = (datetime.now(timezone.utc) - start_time).total_seconds()
+        elapsed = (_utcnow() - start_time).total_seconds()
         crud.complete_job(db, job_id, elapsed)
         logger.info(f"[{job_id}] Completed in {elapsed:.1f}s")
 

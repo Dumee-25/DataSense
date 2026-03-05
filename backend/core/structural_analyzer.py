@@ -308,7 +308,10 @@ class StructuralAnalyzer:
                 ir = None
                 if task == 'classification':
                     vc = df[col].value_counts(normalize=True)
-                    ir = round(float(vc.iloc[0] / max(vc.iloc[-1], 1e-10)), 2)
+                    if len(vc) >= 2:
+                        ir = round(float(vc.iloc[0] / max(vc.iloc[-1], 1e-10)), 2)
+                    elif len(vc) == 1:
+                        ir = 1.0
                 cands.append({'column': col, 'score': sc, 'task_type': task, 'n_classes': nu,
                               'imbalance_ratio': ir, 'reasons': reasons})
         return sorted(cands, key=lambda x: x['score'], reverse=True)[:3]
