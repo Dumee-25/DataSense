@@ -55,6 +55,10 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# Rate limiting — must be added after CORS so headers are present
+from utils.rate_limiter import RateLimitMiddleware
+app.add_middleware(RateLimitMiddleware)
+
 # Register routes
 from api.routes import router
 from api.auth_routes import auth_router
