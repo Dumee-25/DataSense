@@ -72,17 +72,24 @@ def run_pipeline(job_id: str, file_path: str, user_context: str = "",
 
     db = SessionLocal()
     start_time = datetime.utcnow()
+
+    # ── Guard: check if cancelled before claiming a slot ───────────────
+    job = crud.get_job(db, job_id)
+    if not job or job.status == JobStatus.cancelled:
+        logger.info(f"[{job_id}] Job was cancelled before pipeline started")
+        db.close()
+        try:
+            if os.path.exists(file_path):
+                os.remove(file_path)
+        except Exception:
+            pass
+        return
+
     with _jobs_lock:
         _active_jobs += 1
 
     try:
         logger.info(f"[{job_id}] Pipeline started: {file_path}")
-
-        # ── Guard: check if cancelled before starting ──────────────────────
-        job = crud.get_job(db, job_id)
-        if not job or job.status == JobStatus.cancelled:
-            logger.info(f"[{job_id}] Job was cancelled before pipeline started")
-            return
 
         # ── Step 1: Validate (5%) ──────────────────────────────────────────
         crud.update_job_progress(db, job_id, 5, "Validating file...")
