@@ -1,5 +1,5 @@
 import uuid
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Optional, List
 from sqlalchemy.orm import Session as DBSession
 from sqlalchemy import desc
@@ -13,7 +13,7 @@ def create_session(db: DBSession, user_id=None, hours: int = 168) -> Session:
     """Create a browser session. Default expiry: 7 days."""
     session = Session(
         user_id=user_id,
-        expires_at=datetime.utcnow() + timedelta(hours=hours)
+        expires_at=datetime.now(timezone.utc) + timedelta(hours=hours)
     )
     db.add(session)
     db.commit()
@@ -28,7 +28,7 @@ def get_session(db: DBSession, session_id: str) -> Optional[Session]:
     except (ValueError, AttributeError):
         return None
     session = db.query(Session).filter(Session.id == sid).first()
-    if session and session.expires_at < datetime.utcnow():
+    if session and session.expires_at < datetime.now(timezone.utc):
         return None
     return session
 
@@ -87,7 +87,7 @@ def update_job_progress(db: DBSession, job_id: str, progress: int, message: str)
     db.query(Job).filter(Job.id == jid).update({
         "progress": progress,
         "progress_message": message,
-        "updated_at": datetime.utcnow()
+        "updated_at": datetime.now(timezone.utc)
     })
     db.commit()
 
@@ -98,7 +98,7 @@ def update_job_status(db: DBSession, job_id: str, status: JobStatus, **kwargs):
         jid = uuid.UUID(job_id)
     except (ValueError, AttributeError):
         return
-    updates = {"status": status, "updated_at": datetime.utcnow()}
+    updates = {"status": status, "updated_at": datetime.now(timezone.utc)}
     updates.update(kwargs)
     db.query(Job).filter(Job.id == jid).update(updates)
     db.commit()
@@ -111,7 +111,7 @@ def complete_job(db: DBSession, job_id: str, processing_time_seconds: float):
         status=JobStatus.completed,
         progress=100,
         progress_message="Analysis complete",
-        completed_at=datetime.utcnow(),
+        completed_at=datetime.now(timezone.utc),
         processing_time_seconds=processing_time_seconds
     )
 
@@ -183,7 +183,7 @@ def get_jobs_for_user(
 
 def cleanup_expired_jobs(db: DBSession, older_than_hours: int = 48) -> int:
     """Delete jobs older than retention period. Returns count deleted."""
-    cutoff = datetime.utcnow() - timedelta(hours=older_than_hours)
+    cutoff = datetime.now(timezone.utc) - timedelta(hours=older_than_hours)
     jobs = db.query(Job).filter(Job.created_at < cutoff).all()
     count = len(jobs)
     for job in jobs:

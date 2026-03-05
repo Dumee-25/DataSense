@@ -4,7 +4,7 @@ import math
 import shutil
 import logging
 import threading
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional
 
 import pandas as pd
@@ -19,10 +19,6 @@ from core import (StructuralAnalyzer, StatisticalEngine, ModelRecommender,
                   ChartEngine)
 from utils.data_validator import DataValidator
 
-from fastapi.responses import StreamingResponse
-import io
-import base64
-from core.pdf_generator import PDFReportGenerator
 logger = logging.getLogger(__name__)
 router = APIRouter()
 
@@ -71,7 +67,7 @@ def run_pipeline(job_id: str, file_path: str, user_context: str = "",
     from database.connection import SessionLocal
 
     db = SessionLocal()
-    start_time = datetime.utcnow()
+    start_time = datetime.now(timezone.utc)
 
     # ── Guard: check if cancelled before claiming a slot ───────────────
     job = crud.get_job(db, job_id)
@@ -216,7 +212,7 @@ def run_pipeline(job_id: str, file_path: str, user_context: str = "",
             recommendations=clean_recs,
         )
 
-        elapsed = (datetime.utcnow() - start_time).total_seconds()
+        elapsed = (datetime.now(timezone.utc) - start_time).total_seconds()
         crud.complete_job(db, job_id, elapsed)
         logger.info(f"[{job_id}] Completed in {elapsed:.1f}s")
 
@@ -466,7 +462,7 @@ def delete_job(
         raise HTTPException(status_code=404, detail="Job not found.")
 
     # Ownership check
-    if datasense_session and str(job.session_id) != datasense_session:
+    if not datasense_session or str(job.session_id) != datasense_session:
         raise HTTPException(status_code=403, detail="Not authorized to delete this job.")
 
     crud.delete_job(db, job_id)
