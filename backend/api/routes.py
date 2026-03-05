@@ -3,6 +3,7 @@ import uuid
 import math
 import shutil
 import logging
+import threading
 from datetime import datetime
 from typing import Optional
 
@@ -34,6 +35,7 @@ TEMP_UPLOAD_DIR = os.getenv("TEMP_UPLOAD_DIR", "temp_uploads")
 USE_LLM = os.getenv("USE_LLM", "true").lower() == "true"
 
 _active_jobs = 0  # In-memory concurrency counter
+_jobs_lock = threading.Lock()  # Protects _active_jobs across threads
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -70,7 +72,8 @@ def run_pipeline(job_id: str, file_path: str, user_context: str = "",
 
     db = SessionLocal()
     start_time = datetime.utcnow()
-    _active_jobs += 1
+    with _jobs_lock:
+        _active_jobs += 1
 
     try:
         logger.info(f"[{job_id}] Pipeline started: {file_path}")
@@ -218,7 +221,8 @@ def run_pipeline(job_id: str, file_path: str, user_context: str = "",
             pass
 
     finally:
-        _active_jobs -= 1
+        with _jobs_lock:
+            _active_jobs -= 1
         db.close()
         # Always clean up temp file
         try:
@@ -263,11 +267,12 @@ async def upload_and_analyze(
         raise HTTPException(status_code=400, detail="Only CSV files are supported.")
 
     # Check concurrency limit
-    if _active_jobs >= MAX_CONCURRENT_JOBS:
-        raise HTTPException(
-            status_code=429,
-            detail=f"Server busy ({MAX_CONCURRENT_JOBS} jobs running). Please try again shortly."
-        )
+    with _jobs_lock:
+        if _active_jobs >= MAX_CONCURRENT_JOBS:
+            raise HTTPException(
+                status_code=429,
+                detail=f"Server busy ({MAX_CONCURRENT_JOBS} jobs running). Please try again shortly."
+            )
 
     # Get or create browser session (tracks history without login)
     session = crud.get_or_create_session(db, datasense_session)
