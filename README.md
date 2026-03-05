@@ -81,6 +81,12 @@ The entire analysis runs as a 7-step background pipeline with real-time progress
 - **Smart display** — charts that have no relevant data are automatically hidden
 - **Downloadable** — each chart can be downloaded as a PNG image
 
+### Security & Operations
+- **Rate limiting** — per-IP sliding-window rate limiter with two tiers: global (60 req/min) and strict (10 req/min) for upload & auth endpoints; returns `429` with `Retry-After` header
+- **File content validation** — rejects binary files (PNG, JPEG, ZIP, PDF, etc.), validates CSV parseability, enforces a 2 000-column limit, and warns on formula-injection patterns (`=`, `+`, `-`, `@`, `|`)
+- **Structured logging** — rotating file logs (`logs/datasense.log`, 5 MB × 5 backups) plus formatted console output; configurable via environment variables
+- **Concurrency control** — thread-safe active-job counter with configurable max concurrent jobs
+
 ### Platform
 - **Real-time progress** — 7-step pipeline with live progress bar and step checklist
 - **PDF report export** — downloadable reports with findings, model recommendations, column details, and charts
@@ -135,7 +141,7 @@ The entire analysis runs as a 7-step background pipeline with real-time progress
 | **Backend**  | FastAPI 0.115, Python 3.11+, SQLAlchemy 2.0, Alembic    |
 | **Database** | PostgreSQL (stores results as structured JSON)              |
 | **AI**       | Ollama (local), OpenAI, or Groq — configurable          |
-| **Analysis** | Pandas 2.2, SciPy 1.13, scikit-learn 1.5               |
+| **Analysis** | Pandas 2.2, SciPy 1.13, scikit-learn 1.5, NumPy 1.26   |
 | **Charts**   | Matplotlib 3.10                                         |
 | **PDF**      | ReportLab 4.2                                           |
 | **Auth**     | JWT + bcrypt, httponly cookies                           |
@@ -238,6 +244,25 @@ INSIGHT_PERSONA=general
 
 # Set to false to skip AI calls and use rule-based insights only
 USE_LLM=true
+
+# Upload & Concurrency
+MAX_FILE_SIZE_MB=50
+MAX_CONCURRENT_JOBS=10
+JOB_RETENTION_HOURS=48
+TEMP_UPLOAD_DIR=temp_uploads
+
+# Rate Limiting
+RATE_LIMIT_REQUESTS=60          # Global: max requests per window
+RATE_LIMIT_WINDOW_S=60          # Global: window in seconds
+RATE_LIMIT_STRICT_REQUESTS=10   # Strict (upload/auth): max per window
+RATE_LIMIT_STRICT_WINDOW_S=60   # Strict: window in seconds
+
+# Logging
+LOG_LEVEL=INFO
+LOG_DIR=logs
+LOG_FILE=datasense.log
+LOG_MAX_BYTES=5242880           # 5 MB
+LOG_BACKUP_COUNT=5
 ```
 
 ### LLM Provider Setup
@@ -254,7 +279,7 @@ If no AI provider is available, DataSense still works — you get rule-based ins
 
 ## Usage
 
-1. **Upload** — Drag and drop a CSV file (up to 50 MB) on the home page.
+1. **Upload** — Drag and drop a CSV file (up to 50 MB) on the home page. The file is validated for correct encoding, CSV structure, and content before processing.
 2. **Analyze** — Watch the 7-step pipeline process your data in real time.
 3. **Explore results** — Browse findings across six tabs:
    - **Summary** — overview of your data, key story, quick wins, and how many issues were found
@@ -303,7 +328,7 @@ If no AI provider is available, DataSense still works — you get rule-based ins
 datasense/
 ├── backend/
 │   ├── api/
-│   │   ├── main.py              # App setup, startup, route registration
+│   │   ├── main.py              # App setup, CORS, rate limiter, startup hooks
 │   │   ├── routes.py            # Analysis endpoints, background pipeline
 │   │   └── auth_routes.py       # Login/register endpoints
 │   ├── core/
@@ -324,7 +349,9 @@ datasense/
 │   │   └── migrations/          # Database schema migrations
 │   ├── utils/
 │   │   ├── auth.py              # Login token & password helpers
-│   │   ├── data_validator.py    # Checks uploaded files before analysis
+│   │   ├── data_validator.py    # Validates uploads (binary, CSV parse, formula injection)
+│   │   ├── rate_limiter.py      # Per-IP sliding-window rate limiter middleware
+│   │   ├── logging_config.py    # Rotating file + console log setup
 │   │   └── dependencies.py      # Shared request helpers
 │   ├── requirements.txt
 │   └── alembic.ini
