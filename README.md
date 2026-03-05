@@ -58,7 +58,6 @@ The entire analysis runs as a 7-step background pipeline with real-time progress
 ### AI Integration
 - **Multiple AI providers** — works with Ollama (local, default), OpenAI, or Groq
 - **Dataset understanding** — the AI figures out what your data is about, what the columns mean, and what domain-specific risks to watch for
-- **Audience modes** — switch between `general` (plain language), `executive` (business focus), `data_scientist` (technical), or `product_manager` (product-oriented)
 - **Response caching** — remembers previous AI answers so identical analyses don't re-run
 - **Works without AI** — if no AI provider is available, you still get rule-based insights; if the AI is slow, it automatically adjusts to keep things moving
 
