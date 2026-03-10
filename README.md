@@ -28,6 +28,7 @@ Upload a CSV. Get clear, actionable insights about your data — what's good, wh
 - [Usage](#usage)
 - [API Reference](#api-reference)
 - [Project Structure](#project-structure)
+- [License](#license)
 
 ---
 
@@ -82,7 +83,7 @@ The entire analysis runs as a 7-step background pipeline with real-time progress
 - **Downloadable** — each chart can be downloaded as a PNG image
 
 ### Security & Operations
-- **Rate limiting** — per-IP sliding-window rate limiter with two tiers: global (60 req/min) and strict (10 req/min) for upload & auth endpoints; returns `429` with `Retry-After` header
+- **Rate limiting** — per-IP sliding-window rate limiter with two tiers: global (60 req/min) and strict (10 req/min) for upload endpoints; returns `429` with `Retry-After` header
 - **File content validation** — rejects binary files (PNG, JPEG, ZIP, PDF, etc.), validates CSV parseability, enforces a 2 000-column limit, and warns on formula-injection patterns (`=`, `+`, `-`, `@`, `|`)
 - **Structured logging** — rotating file logs (`logs/datasense.log`, 5 MB × 5 backups) plus formatted console output; configurable via environment variables
 - **Concurrency control** — thread-safe active-job counter with configurable max concurrent jobs
@@ -91,8 +92,7 @@ The entire analysis runs as a 7-step background pipeline with real-time progress
 - **Real-time progress** — 7-step pipeline with live progress bar and step checklist
 - **PDF report export** — downloadable reports with findings, model recommendations, column details, and charts
 - **History** — browse past analyses with key info (rows, columns, issues, model used)
-- **Authentication** — optional accounts; your analysis history transfers when you sign up
-- **Works without an account** — anonymous users get a session cookie so their analyses are saved
+- **Session-based tracking** — anonymous session cookies preserve your analysis history across page loads
 
 ---
 
@@ -111,13 +111,13 @@ The entire analysis runs as a 7-step background pipeline with real-time progress
 ┌─────────────────────────────────────────────────────────┐
 │  Backend (FastAPI + Python)                              │
 │  ┌────────────┐  ┌──────────────────────────────────┐   │
-│  │  Auth       │  │  Analysis Pipeline (Background)   │  │
-│  │  Routes     │  │  1. Check file                     │  │
+│  │  Analysis  │  │  Analysis Pipeline (Background)   │  │
+│  │  Routes    │  │  1. Check file                     │  │
 │  │            │  │  2. Load data                      │  │
-│  │  Analysis  │  │  3. Examine structure              │  │
-│  │  Routes    │  │  4. Run statistics                 │  │
+│  │  PDF       │  │  3. Examine structure              │  │
+│  │  Export    │  │  4. Run statistics                 │  │
 │  │            │  │  5. Pick best model                │  │
-│  │  PDF Export│  │  6. AI-powered explanations        │  │
+│  │  Charts    │  │  6. AI-powered explanations        │  │
 │  └────────────┘  │  7. Save results                   │  │
 │                   └──────────────────────────────────┘   │
 │                        │                                 │
@@ -141,10 +141,10 @@ The entire analysis runs as a 7-step background pipeline with real-time progress
 | **Backend**  | FastAPI 0.115, Python 3.11+, SQLAlchemy 2.0, Alembic    |
 | **Database** | PostgreSQL (stores results as structured JSON)              |
 | **AI**       | Ollama (local), OpenAI, or Groq — configurable          |
-| **Analysis** | Pandas 2.2, SciPy 1.13, scikit-learn 1.5, NumPy 1.26   |
+| **Analysis** | Polars 1.0+, SciPy 1.13, scikit-learn 1.5, NumPy 1.26  |
 | **Charts**   | Matplotlib 3.10                                         |
 | **PDF**      | ReportLab 4.2                                           |
-| **Auth**     | JWT + bcrypt, httponly cookies                           |
+| **Session**  | Cookie-based session tracking                            |
 
 ---
 
@@ -190,7 +190,7 @@ pip install -r requirements.txt
 uvicorn api.main:app --reload --port 8000
 ```
 
-The API will be available at `http://localhost:8000`. Health check: `GET http://localhost:8000/health`.
+The API will be available at `http://localhost:8000`. Health check: `GET http://localhost:8000/` returns the API name, version, and status.
 
 ### Frontend Setup
 
@@ -279,7 +279,7 @@ If no AI provider is available, DataSense still works — you get rule-based ins
 
 ## Usage
 
-1. **Upload** — Drag and drop a CSV file (up to 50 MB) on the home page. The file is validated for correct encoding, CSV structure, and content before processing.
+1. **Upload** — Drag and drop a CSV file (up to 200 MB) on the home page. Optionally expand "Advanced options" to provide domain context or specify a target column. The file is validated for correct encoding, CSV structure, and content before processing.
 2. **Analyze** — Watch the 7-step pipeline process your data in real time.
 3. **Explore results** — Browse findings across six tabs:
    - **Summary** — overview of your data, key story, quick wins, and how many issues were found
@@ -289,7 +289,7 @@ If no AI provider is available, DataSense still works — you get rule-based ins
    - **Model** — which ML model to use, why, alternatives, data prep steps, and how to test it
    - **Columns** — profile of every column (type, missing %, unique values, notes)
 4. **Export** — Download a professionally formatted PDF report.
-5. **History** — Revisit past analyses from the History page. Sign in to preserve history across devices.
+5. **History** — Revisit past analyses from the History page.
 
 ---
 
@@ -309,17 +309,6 @@ If no AI provider is available, DataSense still works — you get rule-based ins
 | `GET`    | `/api/results/{job_id}/export/pdf`| Download PDF report                  |
 | `GET`    | `/api/results/{job_id}/charts`    | Fetch base64-encoded chart PNGs      |
 
-### Authentication
-
-| Method   | Endpoint              | Description                          |
-| -------- | --------------------- | ------------------------------------ |
-| `POST`   | `/api/auth/register`  | Create an account                    |
-| `POST`   | `/api/auth/login`     | Sign in                              |
-| `POST`   | `/api/auth/logout`    | Sign out                             |
-| `GET`    | `/api/auth/me`        | Get current user profile             |
-| `PATCH`  | `/api/auth/me`        | Update name or password              |
-| `DELETE` | `/api/auth/me`        | Delete account and all data          |
-
 ---
 
 ## Project Structure
@@ -329,8 +318,7 @@ datasense/
 ├── backend/
 │   ├── api/
 │   │   ├── main.py              # App setup, CORS, rate limiter, startup hooks
-│   │   ├── routes.py            # Analysis endpoints, background pipeline
-│   │   └── auth_routes.py       # Login/register endpoints
+│   │   └── routes.py            # Analysis endpoints, background pipeline
 │   ├── core/
 │   │   ├── structural_analyzer.py   # Detects column types, missing data, duplicates
 │   │   ├── statistical_engine.py    # Finds correlations, outliers, data patterns, PCA, clustering
@@ -343,16 +331,13 @@ datasense/
 │   │   └── pdf_generator.py         # Creates downloadable PDF reports
 │   ├── database/
 │   │   ├── connection.py        # Database connection setup
-│   │   ├── models.py            # Database tables: users, sessions, jobs, results
+│   │   ├── models.py            # Database tables: jobs, results
 │   │   ├── crud.py              # Job & result create/read/update/delete
-│   │   ├── auth_crud.py         # User & session create/read/update/delete
 │   │   └── migrations/          # Database schema migrations
 │   ├── utils/
-│   │   ├── auth.py              # Login token & password helpers
 │   │   ├── data_validator.py    # Validates uploads (binary, CSV parse, formula injection)
 │   │   ├── rate_limiter.py      # Per-IP sliding-window rate limiter middleware
-│   │   ├── logging_config.py    # Rotating file + console log setup
-│   │   └── dependencies.py      # Shared request helpers
+│   │   └── logging_config.py    # Rotating file + console log setup
 │   ├── requirements.txt
 │   └── alembic.ini
 ├── frontend/
@@ -365,8 +350,7 @@ datasense/
 │   │   │   ├── results/[jobId]/     # Results dashboard (6 tabs)
 │   │   │   └── history/             # Past analyses
 │   │   ├── components/
-│   │   │   ├── NavBar.tsx           # Top navigation bar
-│   │   │   └── AuthModal.tsx        # Login / register modal
+│   │   │   └── NavBar.tsx           # Top navigation bar
 │   │   └── lib/
 │   │       └── datasense-api.ts     # Typed API client
 │   ├── next.config.js               # Routes API calls to the backend
@@ -375,3 +359,9 @@ datasense/
 │   └── package.json
 └── README.md
 ```
+
+---
+
+## License
+
+MIT
