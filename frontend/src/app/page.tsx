@@ -85,7 +85,7 @@ export default function UploadPage() {
                 <p className="text-sm" style={{ color: "var(--muted)" }}>
                   or <span style={{ color: "var(--teal)" }}>click to browse</span>
                 </p>
-                <p className="text-xs mt-2" style={{ color: "var(--muted)" }}>CSV only · max 50 MB</p>
+                <p className="text-xs mt-2" style={{ color: "var(--muted)" }}>CSV only · max 200 MB</p>
               </>
             )}
             <input id="csv-input" type="file" accept=".csv" className="hidden"

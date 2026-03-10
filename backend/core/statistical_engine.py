@@ -1,4 +1,4 @@
-import pandas as pd, numpy as np, logging
+import polars as pl, polars.selectors as cs, numpy as np, logging
 from typing import Dict, Any
 from scipy import stats as sp_stats
 
@@ -40,10 +40,33 @@ _SENTINEL_VALUES: frozenset = frozenset({
 _SENTINEL_MIN_PCT = 0.5  # minimum % of non-null values that must match to trigger replacement
 
 
+def _corr_matrix_np(df: pl.DataFrame, cols: list) -> np.ndarray:
+    """Pairwise Pearson correlation matrix as a numpy array (handles nulls via pairwise deletion)."""
+    n = len(cols)
+    if n < 2:
+        return np.array([])
+    arr = df.select(cols).to_numpy()  # nulls become NaN in float columns
+    cr = np.full((n, n), np.nan)
+    for i in range(n):
+        cr[i, i] = 1.0
+        for j in range(i + 1, n):
+            mask = ~(np.isnan(arr[:, i]) | np.isnan(arr[:, j]))
+            a, b = arr[mask, i], arr[mask, j]
+            if len(a) >= 3 and np.std(a) > 0 and np.std(b) > 0:
+                r = float(np.corrcoef(a, b)[0, 1])
+                cr[i, j] = cr[j, i] = r
+    return cr
+
+
 class StatisticalEngine:
     __slots__ = ()
 
-    def analyze(self, df: pd.DataFrame, blueprint: dict) -> Dict[str, Any]:
+    def analyze(self, df: pl.DataFrame, blueprint: dict) -> Dict[str, Any]:
+        # Normalize NaN → null for consistent null handling
+        float_cols = df.select(cs.float()).columns
+        if float_cols:
+            df = df.with_columns([pl.col(c).fill_nan(None) for c in float_cols])
+
         # ── Step 0: Scrub sentinel values BEFORE any statistics are computed ──────
         # Sentinel placeholders (-9999, 999, etc.) corrupt correlations, skewness,
         # variance, and outlier detection if left in place.  We work on a clean copy;
@@ -53,7 +76,7 @@ class StatisticalEngine:
             logger.info(f"StatisticalEngine sentinel scrub: {scrub_log}")
 
         # ── Step 1: Downsample for O(n²) heavy operations only ───────────────────
-        df_sample = (df_clean.sample(n=_SAMPLE_MAX_ROWS, random_state=42)
+        df_sample = (df_clean.sample(n=_SAMPLE_MAX_ROWS, seed=42)
                      if len(df_clean) > _SAMPLE_MAX_ROWS else df_clean)
         if len(df_clean) > _SAMPLE_MAX_ROWS:
             logger.info(f"StatisticalEngine: downsampled {len(df_clean):,} → "
@@ -65,10 +88,10 @@ class StatisticalEngine:
         # distribution statistics.  The StructuralAnalyzer already tags them.
         id_cols = set(blueprint.get('data_structure', {}).get('id_columns', []))
 
-        nc   = [c for c in df_clean.select_dtypes(include=[np.number]).columns if c not in id_cols]
-        cc   = df_clean.select_dtypes(include=['object', 'category']).columns.tolist()
-        nc_s = [c for c in df_sample.select_dtypes(include=[np.number]).columns if c not in id_cols]
-        cc_s = df_sample.select_dtypes(include=['object', 'category']).columns.tolist()
+        nc   = [c for c in df_clean.select(cs.numeric()).columns if c not in id_cols]
+        cc   = df_clean.select(cs.string() | cs.categorical()).columns
+        nc_s = [c for c in df_sample.select(cs.numeric()).columns if c not in id_cols]
+        cc_s = df_sample.select(cs.string() | cs.categorical()).columns
         return {
             'red_flags': self._find_red_flags(df_clean, df_sample, blueprint, nc, cc, nc_s, cc_s),
             'warnings': self._find_warnings(df_sample, nc_s, cc_s),
@@ -81,7 +104,7 @@ class StatisticalEngine:
             'cluster_preview': self._cluster_preview(df_sample, nc_s),
         }
 
-    def _scrub_sentinels(self, df: pd.DataFrame, blueprint: dict):
+    def _scrub_sentinels(self, df: pl.DataFrame, blueprint: dict):
         """Return a sentinel-free copy of df and an audit log of replacements made.
 
         Two-pass strategy:
@@ -95,7 +118,7 @@ class StatisticalEngine:
 
         The caller's df is never mutated — we always work on a copy.
         """
-        df_clean = df.copy()
+        df_clean = df.clone()
         scrub_log: Dict[str, Any] = {}   # col → {'values': [...], 'cells_replaced': int}
 
         # ── Pass 1: Blueprint-guided replacements ────────────────────────────────
@@ -106,9 +129,11 @@ class StatisticalEngine:
             sentinels = issue.get('sentinel_values', [])
             if col not in df_clean.columns or not sentinels:
                 continue
-            before = df_clean[col].isnull().sum()
-            df_clean[col] = df_clean[col].replace(sentinels, np.nan)
-            replaced = int(df_clean[col].isnull().sum()) - int(before)
+            before = df_clean[col].null_count()
+            df_clean = df_clean.with_columns(
+                pl.when(pl.col(col).is_in(sentinels)).then(None).otherwise(pl.col(col)).alias(col)
+            )
+            replaced = int(df_clean[col].null_count()) - int(before)
             if replaced > 0:
                 scrub_log[col] = {'source': 'blueprint', 'values': sentinels,
                                   'cells_replaced': replaced}
@@ -116,13 +141,13 @@ class StatisticalEngine:
 
         # ── Pass 2: Safety-net scan on columns not already scrubbed ─────────────
         already_scrubbed = set(scrub_log.keys())
-        for col in df_clean.select_dtypes(include=[np.number]).columns:
+        for col in df_clean.select(cs.numeric()).columns:
             if col in already_scrubbed:
                 continue
-            s = df_clean[col].dropna()
+            s = df_clean[col].drop_nulls()
             if len(s) < 10:
                 continue
-            non_sentinel = s[~s.isin(_SENTINEL_VALUES)]
+            non_sentinel = s.filter(~s.is_in(list(_SENTINEL_VALUES)))
             if len(non_sentinel) < 5:
                 continue
             p1, p99 = non_sentinel.quantile(0.01), non_sentinel.quantile(0.99)
@@ -136,9 +161,11 @@ class StatisticalEngine:
                 if sv < p1 or sv > p99:
                     found.append(sv)
             if found:
-                before = df_clean[col].isnull().sum()
-                df_clean[col] = df_clean[col].replace(found, np.nan)
-                replaced = int(df_clean[col].isnull().sum()) - int(before)
+                before = df_clean[col].null_count()
+                df_clean = df_clean.with_columns(
+                    pl.when(pl.col(col).is_in(found)).then(None).otherwise(pl.col(col)).alias(col)
+                )
+                replaced = int(df_clean[col].null_count()) - int(before)
                 scrub_log[col] = {'source': 'safety_net', 'values': found,
                                   'cells_replaced': replaced}
                 logger.debug(f"  Safety-net scrubbed {replaced} sentinel(s) from '{col}': {found}")
@@ -149,8 +176,10 @@ class StatisticalEngine:
         flags = []
         for cand in bp.get('target_candidates', [])[:1]:
             col = cand['column']
-            if col in df.columns and df[col].nunique() <= 20:
-                maj = float(df[col].value_counts(normalize=True).iloc[0])
+            if col in df.columns and df[col].drop_nulls().n_unique() <= 20:
+                vc = df[col].value_counts().sort("count", descending=True)
+                total = vc["count"].sum()
+                maj = float(vc["count"][0]) / total
                 if maj >= 0.85:
                     flags.append({
                         'type': 'class_imbalance', 'severity': 'critical', 'column': col,
@@ -169,13 +198,15 @@ class StatisticalEngine:
         try:
             if len(nc) < 2: return None
             a, b, cat = nc[0], nc[1], cc[0]
-            oc, _ = sp_stats.pearsonr(df[a].dropna(), df[b].dropna())
-            grps = df[cat].dropna().unique()
+            pair_ab = df.select([a, b]).drop_nulls()
+            if len(pair_ab) < 3: return None
+            oc, _ = sp_stats.pearsonr(pair_ab[a].to_numpy(), pair_ab[b].to_numpy())
+            grps = df[cat].drop_nulls().unique().to_list()
             if not 2 <= len(grps) <= 10: return None
             rev = sum(1 for g in grps
-                      for sub in (df[df[cat] == g][[a, b]].dropna(),)
+                      for sub in (df.filter(pl.col(cat) == g).select([a, b]).drop_nulls(),)
                       if len(sub) >= 10
-                      for gc in (sp_stats.pearsonr(sub[a], sub[b])[0],)
+                      for gc in (sp_stats.pearsonr(sub[a].to_numpy(), sub[b].to_numpy())[0],)
                       if np.sign(gc) != np.sign(oc) and abs(gc) > 0.2)
             if rev >= 2:
                 return {
@@ -200,10 +231,12 @@ class StatisticalEngine:
     def _find_warnings(self, df, nc, cc) -> list:
         w = []
         if len(nc) >= 2:
-            cm = df[nc].corr().abs()
+            cm = np.abs(_corr_matrix_np(df, nc))
             for i in range(len(nc)):
                 for j in range(i + 1, len(nc)):
-                    v = cm.iloc[i, j]
+                    v = cm[i, j]
+                    if np.isnan(v):
+                        continue
                     if v >= 0.95:
                         w.append({'type': 'multicollinearity', 'severity': 'high',
                             'var1': nc[i], 'var2': nc[j], 'correlation': round(float(v), 3),
@@ -217,7 +250,7 @@ class StatisticalEngine:
                             'plain_english': 'These two columns tend to move together. This is fine for tree-based models but will hurt linear regression and logistic regression.',
                             'recommendation': 'Consider combining them into one feature or using PCA to reduce dimensionality.'})
         for col in nc:
-            s = df[col].dropna()
+            s = df[col].drop_nulls()
             if len(s) < 10: continue
             q1, q3 = s.quantile(0.25), s.quantile(0.75)
             iqr = q3 - q1
@@ -233,10 +266,10 @@ class StatisticalEngine:
             h = self._check_heteroscedasticity(df, nc)
             if h: w.append(h)
         for col in nc:
-            s = df[col].dropna()
+            s = df[col].drop_nulls()
             if len(s) < 10: continue
             cv = s.std() / (abs(s.mean()) + 1e-10)
-            if cv < 0.01 and s.nunique() > 1:
+            if cv < 0.01 and s.drop_nulls().n_unique() > 1:
                 w.append({'type': 'near_zero_variance', 'severity': 'medium', 'column': col,
                     'message': f'Column "{col}" has almost no variation — nearly all values are the same.',
                     'plain_english': 'A column that barely changes cannot teach a model anything. It\'s like trying to predict exam scores using everyone\'s age when everyone is 20.',
@@ -245,7 +278,7 @@ class StatisticalEngine:
         # |skewness| > _EXTREME_SKEW_THRESHOLD almost always means sentinel values, broken sensors,
         # or severe data-entry errors have contaminated the column.
         for col in nc:
-            s = df[col].dropna()
+            s = df[col].drop_nulls()
             if len(s) < 10: continue
             try:
                 sk = float(s.skew())
@@ -269,7 +302,7 @@ class StatisticalEngine:
                                   f'{float(s.quantile(0.99)):,.1f}. '
                                   f'That one rogue value is dragging every statistic in the column off a cliff.'),
                 'recommendation': (f'First, check whether "{col}" contains sentinel/placeholder values '
-                                   f'(e.g. -9999, 9999) and replace them with np.nan. '
+                                   f'(e.g. -9999, 9999) and replace them with null. '
                                    f'Then re-run the skewness check. If the extreme skewness persists, '
                                    f'investigate the raw data source for broken readings or entry errors '
                                    f'before applying any log transformation.'),
@@ -280,9 +313,9 @@ class StatisticalEngine:
         try:
             if len(nc) < 2: return None
             col, tgt = nc[0], nc[-1]
-            s = df[[col, tgt]].dropna()
+            s = df.select([col, tgt]).drop_nulls()
             if len(s) < 30: return None
-            x, y = s[col].values, s[tgt].values
+            x, y = s[col].to_numpy(), s[tgt].to_numpy()
             sl, ic, *_ = sp_stats.linregress(x, y)
             res = y - (sl * x + ic)
             med = np.median(x)
@@ -312,7 +345,7 @@ class StatisticalEngine:
         return {
             'has_numeric_features': len(nc) > 0, 'high_dimensional': len(df.columns) > 50,
             'large_dataset': len(df) > 100_000, 'small_dataset': len(df) < 500,
-            'many_categoricals': len(df.select_dtypes(include='object').columns) > len(nc),
+            'many_categoricals': len(df.select(cs.string()).columns) > len(nc),
             'skewed_columns': skewed, 'has_skewed_features': len(skewed) > 0,
             'extremely_skewed_columns': extremely_skewed,
             'has_extreme_skewness': len(extremely_skewed) > 0,
@@ -321,10 +354,10 @@ class StatisticalEngine:
     def _compute_correlations(self, df, nc) -> list:
         if len(nc) < 2: return []
         try:
-            cr = df[nc].corr()
-            pairs = [{'col_a': nc[i], 'col_b': nc[j], 'correlation': round(float(cr.iloc[i, j]), 3),
-                      'strength': self._corr_str(cr.iloc[i, j])}
-                     for i in range(len(nc)) for j in range(i+1, len(nc)) if not np.isnan(cr.iloc[i, j])]
+            cr = _corr_matrix_np(df, nc)
+            pairs = [{'col_a': nc[i], 'col_b': nc[j], 'correlation': round(float(cr[i, j]), 3),
+                      'strength': self._corr_str(cr[i, j])}
+                     for i in range(len(nc)) for j in range(i+1, len(nc)) if not np.isnan(cr[i, j])]
             return sorted(pairs, key=lambda x: abs(x['correlation']), reverse=True)[:20]
         except Exception as e:
             logger.warning(f"Correlation computation failed: {e}")
@@ -340,7 +373,7 @@ class StatisticalEngine:
     def _outlier_summary(self, df, nc) -> list:
         out = []
         for col in nc[:15]:
-            s = df[col].dropna()
+            s = df[col].drop_nulls()
             if len(s) < 10: continue
             q1, q3 = s.quantile(0.25), s.quantile(0.75)
             iqr = q3 - q1
@@ -352,7 +385,7 @@ class StatisticalEngine:
     def _distribution_summary(self, df, nc) -> list:
         out = []
         for col in nc[:15]:
-            s = df[col].dropna()
+            s = df[col].drop_nulls()
             if len(s) < 10: continue
             sk = float(s.skew())
             if abs(sk) > _EXTREME_SKEW_THRESHOLD:
@@ -362,22 +395,22 @@ class StatisticalEngine:
             elif sk < -2:  shape = 'heavily left-skewed'
             elif sk < -0.5: shape = 'left-skewed'
             else:           shape = 'roughly normal'
-            out.append({'column': col, 'skewness': round(sk, 3), 'kurtosis': round(float(s.kurt()), 3),
+            out.append({'column': col, 'skewness': round(sk, 3), 'kurtosis': round(float(s.kurtosis()), 3),
                 'shape': shape})
         return out
 
     # ── PCA summary ───────────────────────────────────────────────────────
-    def _pca_summary(self, df: pd.DataFrame, nc: list) -> dict | None:
+    def _pca_summary(self, df: pl.DataFrame, nc: list) -> dict | None:
         """Return explained-variance ratios for up to 10 principal components."""
         if len(nc) < 3:
             return None
         try:
             from sklearn.decomposition import PCA
             from sklearn.preprocessing import StandardScaler
-            sub = df[nc].dropna()
+            sub = df.select(nc).drop_nulls()
             if len(sub) < 30:
                 return None
-            X = StandardScaler().fit_transform(sub)
+            X = StandardScaler().fit_transform(sub.to_numpy())
             n_comp = min(10, len(nc), len(sub))
             pca = PCA(n_components=n_comp, random_state=42)
             pca.fit(X)
@@ -392,7 +425,7 @@ class StatisticalEngine:
             return None
 
     # ── Cluster preview ───────────────────────────────────────────────────
-    def _cluster_preview(self, df: pd.DataFrame, nc: list) -> dict | None:
+    def _cluster_preview(self, df: pl.DataFrame, nc: list) -> dict | None:
         """Run KMeans (k=2..6) and return the best-k cluster assignments projected onto PC1/PC2."""
         if len(nc) < 3:
             return None
@@ -400,10 +433,10 @@ class StatisticalEngine:
             from sklearn.decomposition import PCA
             from sklearn.preprocessing import StandardScaler
             from sklearn.cluster import KMeans
-            sub = df[nc].dropna()
+            sub = df.select(nc).drop_nulls()
             if len(sub) < 50:
                 return None
-            X = StandardScaler().fit_transform(sub)
+            X = StandardScaler().fit_transform(sub.to_numpy())
             pca = PCA(n_components=2, random_state=42)
             coords = pca.fit_transform(X)
 

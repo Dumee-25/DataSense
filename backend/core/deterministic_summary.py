@@ -6,7 +6,7 @@ ensure the LLM receives ONLY pre-computed facts — never raw data rows — so i
 cannot hallucinate mathematical conclusions.
 
 Design principle:
-  Raw CSV → [Pandas/SciPy deterministic code] → DeterministicSummary (JSON) → LLM interprets
+  Raw CSV → [Polars/SciPy deterministic code] → DeterministicSummary (JSON) → LLM interprets
 """
 from __future__ import annotations
 import logging

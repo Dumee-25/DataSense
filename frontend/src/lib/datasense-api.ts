@@ -99,8 +99,6 @@ export interface FullResults {
   }
 }
 
-export interface AuthUser { id: string; email: string; name?: string; role: string; created_at: string }
-
 class ApiError extends Error {
   status: number
   constructor(message: string, status: number) {
@@ -119,7 +117,13 @@ async function call(path: string, opts?: RequestInit) {
   return res
 }
 
+const MAX_FILE_SIZE_MB = 200
+
 export const uploadCSV = async (file: File, context?: string, targetColumn?: string) => {
+  const sizeMB = file.size / (1024 * 1024)
+  if (sizeMB > MAX_FILE_SIZE_MB) {
+    throw new ApiError(`File too large (${sizeMB.toFixed(1)} MB). Max is ${MAX_FILE_SIZE_MB} MB.`, 413)
+  }
   const form = new FormData(); form.append("file", file)
   if (context) form.append("context", context)
   if (targetColumn) form.append("target_column", targetColumn)
@@ -150,31 +154,3 @@ export const downloadPdf = async (id: string) => {
   URL.revokeObjectURL(url)
 }
 export const fetchCharts    = (id: string): Promise<ChartData> => call(`/results/${id}/charts`).then(r => r.json())
-
-/**
- * Fetch current user. Only returns null for genuine "not authenticated" responses.
- * Network errors and rate-limit (429) responses are re-thrown so the caller can
- * decide whether to retry rather than assuming the user is logged out.
- */
-export const fetchCurrentUser = async (): Promise<{ user: AuthUser | null; authenticated: boolean }> => {
-  try {
-    const res = await call("/auth/me")
-    return res.json()
-  } catch (err: any) {
-    // A genuine "not authenticated" API response — user truly isn't logged in
-    if (err instanceof ApiError && (err.status === 401 || err.status === 403)) {
-      return { user: null, authenticated: false }
-    }
-    // Any other error (429, network failure, etc.) — re-throw so the caller
-    // does NOT clear the user state and can retry instead.
-    throw err
-  }
-}
-
-export const signIn = (email: string, password: string) =>
-  call("/auth/login", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ email, password }) }).then(r => r.json())
-
-export const signUp = (email: string, password: string, name?: string) =>
-  call("/auth/register", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ email, password, name }) }).then(r => r.json())
-
-export const signOut = () => call("/auth/logout", { method: "POST" })

@@ -14,12 +14,6 @@ def _utcnow() -> datetime:
     return datetime.now(timezone.utc).replace(tzinfo=None)
 
 
-class UserRole(str, enum.Enum):
-    viewer = "viewer"
-    analyst = "analyst"
-    admin = "admin"
-
-
 class JobStatus(str, enum.Enum):
     queued = "queued"
     processing = "processing"
@@ -29,27 +23,21 @@ class JobStatus(str, enum.Enum):
 
 
 class User(Base):
-    """Registered user. Anonymous users are tracked via Session only."""
+    """Kept for DB schema compatibility. Not actively used."""
     __tablename__ = "users"
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     email = Column(String(255), unique=True, nullable=True, index=True)
-    password_hash = Column(String(255), nullable=True)
     name = Column(String(100), nullable=True)
-    role = Column(SAEnum(UserRole), default=UserRole.analyst, nullable=False)
     is_active = Column(Boolean, default=True, nullable=False)
     created_at = Column(DateTime, default=_utcnow, nullable=False)
-    last_login = Column(DateTime, nullable=True)
 
     sessions = relationship("Session", back_populates="user", cascade="all, delete-orphan")
     jobs = relationship("Job", back_populates="user")
 
-    def __repr__(self):
-        return f"<User id={self.id} email={self.email}>"
-
 
 class Session(Base):
-    """Browser session — created for every visitor, linked to User if authenticated."""
+    """Browser session — created for every visitor."""
     __tablename__ = "sessions"
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
@@ -65,7 +53,7 @@ class Session(Base):
 
 
 class Job(Base):
-    """One analysis run. Linked to a Session (anonymous) or User (authenticated)."""
+    """One analysis run. Linked to a browser Session."""
     __tablename__ = "jobs"
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)

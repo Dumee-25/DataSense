@@ -35,7 +35,7 @@ class DataValidator:
 
     def __init__(
         self,
-        max_file_size_mb: int = 50,
+        max_file_size_mb: int = 200,
         max_columns: int = 2000,
         warn_formula_injection: bool = True,
     ):

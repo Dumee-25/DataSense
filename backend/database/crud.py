@@ -4,7 +4,7 @@ from typing import Optional, List
 from sqlalchemy.orm import Session as DBSession
 from sqlalchemy import desc
 
-from database.models import User, Session, Job, Result, DatasetMetadata, JobStatus
+from database.models import Session, Job, Result, DatasetMetadata, JobStatus
 
 def _utcnow() -> datetime:
     """Timezone-naive UTC now — compatible with SQLAlchemy DateTime columns."""
@@ -163,23 +163,6 @@ def get_jobs_for_session(
     except (ValueError, AttributeError):
         return []
     query = db.query(Job).filter(Job.session_id == sid)
-    if status:
-        query = query.filter(Job.status == status)
-    return query.order_by(desc(Job.created_at)).limit(limit).all()
-
-
-def get_jobs_for_user(
-    db: DBSession,
-    user_id: str,
-    limit: int = 50,
-    status: Optional[str] = None
-) -> List[Job]:
-    """List jobs for a user, newest first."""
-    try:
-        uid = uuid.UUID(user_id)
-    except (ValueError, AttributeError):
-        return []
-    query = db.query(Job).filter(Job.user_id == uid)
     if status:
         query = query.filter(Job.status == status)
     return query.order_by(desc(Job.created_at)).limit(limit).all()

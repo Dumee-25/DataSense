@@ -149,7 +149,7 @@ export default function HistoryPage() {
 
         {jobs.length > 0 && !loading && (
           <p className="text-center text-xs mt-8" style={{ color: "var(--muted)" }}>
-            Sign in to keep your history across devices and browser sessions.
+            History is stored in your browser session.
           </p>
         )}
       </main>

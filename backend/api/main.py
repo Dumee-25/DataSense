@@ -68,9 +68,7 @@ app.add_middleware(                                # outer — runs first
 
 # Register routes
 from api.routes import router
-from api.auth_routes import auth_router
 app.include_router(router, prefix="/api")
-app.include_router(auth_router, prefix="/api/auth")
 
 @app.get("/")
 def root():

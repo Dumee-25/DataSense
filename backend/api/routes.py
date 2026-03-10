@@ -12,7 +12,8 @@ def _utcnow() -> datetime:
     """Timezone-naive UTC now — compatible with SQLAlchemy DateTime columns."""
     return datetime.now(timezone.utc).replace(tzinfo=None)
 
-import pandas as pd
+import polars as pl
+import polars.selectors as cs
 from fastapi import APIRouter, UploadFile, File, Form, BackgroundTasks, HTTPException, Query, Depends, Cookie, Response
 from sqlalchemy.orm import Session as DBSession
 
@@ -29,7 +30,7 @@ router = APIRouter()
 
 # ── Config ────────────────────────────────────────────────────────────────────
 
-MAX_FILE_SIZE_MB = int(os.getenv("MAX_FILE_SIZE_MB", "50"))
+MAX_FILE_SIZE_MB = int(os.getenv("MAX_FILE_SIZE_MB", "200"))
 MAX_CONCURRENT_JOBS = int(os.getenv("MAX_CONCURRENT_JOBS", "10"))
 JOB_RETENTION_HOURS = int(os.getenv("JOB_RETENTION_HOURS", "48"))
 TEMP_UPLOAD_DIR = os.getenv("TEMP_UPLOAD_DIR", "temp_uploads")
@@ -103,19 +104,28 @@ def run_pipeline(job_id: str, file_path: str, user_context: str = "",
         # ── Step 2: Load (10%) ────────────────────────────────────────────
         crud.update_job_progress(db, job_id, 10, "Loading dataset...")
         try:
-            df = pd.read_csv(file_path, encoding='utf-8')
-        except UnicodeDecodeError:
-            df = pd.read_csv(file_path, encoding='latin1')
+            df = pl.read_csv(file_path)
+        except Exception:
+            # Fallback: read as bytes, decode with latin-1, then parse as UTF-8
+            import io
+            with open(file_path, 'rb') as f:
+                raw = f.read()
+            df = pl.read_csv(io.BytesIO(raw.decode('latin-1').encode('utf-8')))
 
-        if df.empty:
+        if df.is_empty():
             crud.fail_job(db, job_id, "The CSV file is empty.", 'empty_file')
             return
+
+        # Normalize NaN → null for consistent null handling
+        float_cols = df.select(cs.float()).columns
+        if float_cols:
+            df = df.with_columns([pl.col(c).fill_nan(None) for c in float_cols])
 
         dataset_info = {
             'rows': int(len(df)),
             'columns': int(len(df.columns)),
             'size_mb': round(os.path.getsize(file_path) / 1024 / 1024, 3),
-            'column_names': df.columns.tolist(),
+            'column_names': list(df.columns),
         }
 
         # Update file size on job record
@@ -282,7 +292,7 @@ async def upload_and_analyze(
                 detail=f"Server busy ({MAX_CONCURRENT_JOBS} jobs running). Please try again shortly."
             )
 
-    # Get or create browser session (tracks history without login)
+    # Get or create browser session
     session = crud.get_or_create_session(db, datasense_session)
 
     # Set session cookie — 7 days, httponly
@@ -301,7 +311,6 @@ async def upload_and_analyze(
         job_id=job_id,
         filename=file.filename,
         session_id=session.id,
-        user_id=session.user_id,
     )
 
     # Save uploaded file to temp directory
@@ -428,7 +437,7 @@ def list_jobs(
 ):
     """
     List all jobs for the current browser session.
-    Powers the History page — no login required.
+    Powers the History page.
     """
     if not datasense_session:
         return {"total": 0, "jobs": []}

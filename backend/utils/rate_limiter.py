@@ -31,10 +31,10 @@ STRICT_MAX_REQUESTS = int(os.getenv("RATE_LIMIT_STRICT_REQUESTS", "10"))
 STRICT_WINDOW_SECONDS = int(os.getenv("RATE_LIMIT_STRICT_WINDOW_S", "60"))
 
 # Paths that get the stricter limit
-_STRICT_PATHS = {"/api/analyze", "/api/auth/login", "/api/auth/register"}
+_STRICT_PATHS = {"/api/analyze"}
 
-# Paths completely exempt from rate limiting (lightweight reads, auth checks)
-_EXEMPT_PATHS = {"/api/auth/me", "/health"}
+# Paths completely exempt from rate limiting (lightweight reads)
+_EXEMPT_PATHS = {"/health"}
 
 # Path prefixes exempt from rate limiting (high-frequency polling)
 _EXEMPT_PREFIXES = ("/api/status/",)
@@ -92,7 +92,7 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next) -> Response:
         # Never rate-limit CORS preflight requests — browsers send OPTIONS
         # before every cross-origin request and blocking them causes opaque
-        # failures that look like random logouts or request blocks.
+        # failures that look like random request blocks.
         if request.method == "OPTIONS":
             return await call_next(request)
 

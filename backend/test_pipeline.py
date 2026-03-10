@@ -6,7 +6,7 @@ import sys
 import os
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-import pandas as pd
+import polars as pl
 import numpy as np
 
 from core.structural_analyzer import StructuralAnalyzer
@@ -20,22 +20,27 @@ def make_test_dataframe():
     np.random.seed(42)
     n = 500
 
-    df = pd.DataFrame({
+    # Build arrays with injected nulls before constructing the DataFrame
+    income = np.random.exponential(50000, n).tolist()
+    for idx in np.random.choice(n, 60, replace=False):
+        income[idx] = None
+
+    category = list(np.random.choice(['A', 'B', 'C'], n, p=[0.7, 0.2, 0.1]))
+    for idx in np.random.choice(n, 30, replace=False):
+        category[idx] = None
+
+    df = pl.DataFrame({
         'age': np.random.randint(18, 70, n),
-        'income': np.random.exponential(50000, n),          # skewed
+        'income': income,
         'score': np.random.normal(0.5, 0.1, n),
-        'category': np.random.choice(['A', 'B', 'C'], n, p=[0.7, 0.2, 0.1]),
-        'region': np.random.choice(['North', 'South', 'East', 'West'], n),
-        'churn': np.random.choice([0, 1], n, p=[0.9, 0.1]),  # imbalanced
-        'duplicate_flag': np.ones(n),                         # constant
+        'category': category,
+        'region': list(np.random.choice(['North', 'South', 'East', 'West'], n)),
+        'churn': np.random.choice([0, 1], n, p=[0.9, 0.1]),
+        'duplicate_flag': np.ones(n),
     })
 
-    # Inject missing values
-    df.loc[np.random.choice(n, 60, replace=False), 'income'] = np.nan
-    df.loc[np.random.choice(n, 30, replace=False), 'category'] = np.nan
-
     # Add duplicate rows
-    df = pd.concat([df, df.iloc[:10]], ignore_index=True)
+    df = pl.concat([df, df.head(10)])
 
     return df
 
