@@ -2,7 +2,14 @@
 import { useState, useCallback } from "react"
 import { useRouter } from "next/navigation"
 import NavBar from "@/components/NavBar"
-import { uploadCSV } from "@/lib/datasense-api"
+import { uploadCSV, InsightPersona } from "@/lib/datasense-api"
+
+const PERSONAS: { value: InsightPersona; label: string; hint: string }[] = [
+  { value: "general",         label: "General",         hint: "Plain language, no jargon" },
+  { value: "executive",       label: "Executive",       hint: "Business impact, decision-ready" },
+  { value: "data_scientist",  label: "Data Scientist",  hint: "Technical detail with code hints" },
+  { value: "product_manager", label: "Product Manager", hint: "User and product impact" },
+]
 
 export default function UploadPage() {
   const router = useRouter()
@@ -12,15 +19,16 @@ export default function UploadPage() {
   const [showAdvanced, setShowAdvanced] = useState(false)
   const [context, setContext]       = useState("")
   const [targetColumn, setTargetColumn] = useState("")
+  const [persona, setPersona]       = useState<InsightPersona>("general")
 
   const handleFile = useCallback(async (file: File) => {
     if (!file.name.endsWith(".csv")) { setError("Only CSV files are supported."); return }
     setError(""); setBusy(true)
     try {
-      const { job_id } = await uploadCSV(file, context || undefined, targetColumn || undefined)
+      const { job_id } = await uploadCSV(file, context || undefined, targetColumn || undefined, persona)
       router.push(`/analyzing/${job_id}`)
     } catch (e: any) { setError(e.message || "Upload failed."); setBusy(false) }
-  }, [router, context, targetColumn])
+  }, [router, context, targetColumn, persona])
 
   return (
     <div className="min-h-screen" style={{ background: "var(--bg)" }}>
@@ -100,7 +108,7 @@ export default function UploadPage() {
           onClick={() => setShowAdvanced(!showAdvanced)}
           className="text-xs font-medium px-3 py-1.5 rounded-full transition-colors fade-up delay-3"
           style={{ color: "var(--teal)", background: "var(--teal-dim)", border: "1px solid rgba(0,217,181,0.2)" }}>
-          {showAdvanced ? "▼" : "▶"} Data Dictionary &amp; Target
+          {showAdvanced ? "▼" : "▶"} Data Dictionary, Target &amp; Audience
         </button>
 
         {/* advanced options panel */}
@@ -152,6 +160,31 @@ export default function UploadPage() {
               />
               <p className="text-xs mt-1" style={{ color: "var(--muted)" }}>
                 Override automatic target detection by specifying the column to predict.
+              </p>
+            </div>
+            <div>
+              <label className="text-xs font-semibold mb-1.5 block" style={{ color: "var(--dim)" }}>
+                Insight Audience
+                <span className="font-normal ml-1" style={{ color: "var(--muted)" }}>(persona)</span>
+              </label>
+              <select
+                value={persona}
+                onChange={e => setPersona(e.target.value as InsightPersona)}
+                className="w-full rounded-xl px-4 py-2.5 text-sm"
+                style={{
+                  background: "var(--surface)",
+                  border: "1px solid var(--border)",
+                  color: "var(--text)",
+                  outline: "none",
+                }}
+                onFocus={e => e.target.style.borderColor = "var(--teal)"}
+                onBlur={e => e.target.style.borderColor = "var(--border)"}>
+                {PERSONAS.map(p => (
+                  <option key={p.value} value={p.value}>{p.label} — {p.hint}</option>
+                ))}
+              </select>
+              <p className="text-xs mt-1" style={{ color: "var(--muted)" }}>
+                Sets the tone of the AI insights — the computed statistics stay identical.
               </p>
             </div>
           </div>

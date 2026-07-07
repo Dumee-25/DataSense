@@ -119,7 +119,9 @@ async function call(path: string, opts?: RequestInit) {
 
 const MAX_FILE_SIZE_MB = 200
 
-export const uploadCSV = async (file: File, context?: string, targetColumn?: string) => {
+export type InsightPersona = "general" | "executive" | "data_scientist" | "product_manager"
+
+export const uploadCSV = async (file: File, context?: string, targetColumn?: string, persona?: InsightPersona) => {
   const sizeMB = file.size / (1024 * 1024)
   if (sizeMB > MAX_FILE_SIZE_MB) {
     throw new ApiError(`File too large (${sizeMB.toFixed(1)} MB). Max is ${MAX_FILE_SIZE_MB} MB.`, 413)
@@ -127,6 +129,7 @@ export const uploadCSV = async (file: File, context?: string, targetColumn?: str
   const form = new FormData(); form.append("file", file)
   if (context) form.append("context", context)
   if (targetColumn) form.append("target_column", targetColumn)
+  if (persona) form.append("persona", persona)
   return (await call("/analyze", { method: "POST", body: form })).json()
 }
 

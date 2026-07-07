@@ -1,7 +1,8 @@
 import os
+import re
 import uuid
 import math
-import shutil
+import hmac
 import logging
 import threading
 import base64
@@ -14,7 +15,8 @@ def _utcnow() -> datetime:
 
 import polars as pl
 import polars.selectors as cs
-from fastapi import APIRouter, UploadFile, File, Form, BackgroundTasks, HTTPException, Query, Depends, Cookie, Response
+from fastapi import (APIRouter, UploadFile, File, Form, BackgroundTasks,
+                     HTTPException, Query, Depends, Cookie, Header, Request, Response)
 from sqlalchemy.orm import Session as DBSession
 
 from database.connection import get_db
@@ -23,7 +25,9 @@ from database.models import JobStatus
 from core import (StructuralAnalyzer, StatisticalEngine, ModelRecommender,
                   InsightGenerator, DeterministicSummary, AggregationEngine, RelevanceFilter,
                   ChartEngine)
+from core.insight_generator import PERSONAS
 from utils.data_validator import DataValidator
+from utils.session_signer import sign_session, verify_session
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -35,6 +39,10 @@ MAX_CONCURRENT_JOBS = int(os.getenv("MAX_CONCURRENT_JOBS", "10"))
 JOB_RETENTION_HOURS = int(os.getenv("JOB_RETENTION_HOURS", "48"))
 TEMP_UPLOAD_DIR = os.getenv("TEMP_UPLOAD_DIR", "temp_uploads")
 USE_LLM = os.getenv("USE_LLM", "true").lower() == "true"
+ADMIN_TOKEN = os.getenv("ADMIN_TOKEN", "")
+
+MAX_FILE_SIZE_BYTES = MAX_FILE_SIZE_MB * 1024 * 1024
+UPLOAD_CHUNK_SIZE = 1024 * 1024  # 1 MB
 
 _active_jobs = 0  # In-memory concurrency counter
 _jobs_lock = threading.Lock()  # Protects _active_jobs across threads
@@ -58,7 +66,7 @@ def sanitize_for_json(obj):
 # ── Background Pipeline ───────────────────────────────────────────────────────
 
 def run_pipeline(job_id: str, file_path: str, user_context: str = "",
-                  explicit_target: str = ""):
+                  explicit_target: str = "", persona: str = ""):
     """
     Runs the full analysis pipeline in a background thread.
     Persists all results to PostgreSQL. Cleans up temp file when done.
@@ -68,6 +76,7 @@ def run_pipeline(job_id: str, file_path: str, user_context: str = "",
         file_path: Path to the uploaded CSV
         user_context: Optional data dictionary / domain context from the user
         explicit_target: Optional user-specified target column
+        persona: Optional insight audience persona (falls back to INSIGHT_PERSONA)
     """
     global _active_jobs
     from database.connection import SessionLocal
@@ -181,7 +190,7 @@ def run_pipeline(job_id: str, file_path: str, user_context: str = "",
         if _is_cancelled(db, job_id): return
         crud.update_job_progress(db, job_id, 90, "Generating insights...")
         try:
-            insights = InsightGenerator(use_llm=USE_LLM).generate_insights(
+            insights = InsightGenerator(use_llm=USE_LLM, persona=persona or None).generate_insights(
                 blueprint, stats, recommendations,
                 user_context=user_context, deterministic_summary=det_summary
             )
@@ -264,11 +273,13 @@ def _is_cancelled(db: DBSession, job_id: str) -> bool:
 
 @router.post("/analyze")
 async def upload_and_analyze(
+    request: Request,
     response: Response,
     background_tasks: BackgroundTasks,
     file: UploadFile = File(...),
     context: Optional[str] = Form(default=None),
     target_column: Optional[str] = Form(default=None),
+    persona: Optional[str] = Form(default=None),
     db: DBSession = Depends(get_db),
     datasense_session: Optional[str] = Cookie(default=None),
 ):
@@ -279,10 +290,29 @@ async def upload_and_analyze(
     Optional form fields:
       - context: A data dictionary or domain context string injected into the LLM prompt
       - target_column: Explicit target column name (overrides heuristic detection)
+      - persona: Insight audience — one of: general, executive, data_scientist,
+        product_manager (defaults to the INSIGHT_PERSONA setting)
     """
     # Validate file type
     if not file.filename.lower().endswith('.csv'):
         raise HTTPException(status_code=400, detail="Only CSV files are supported.")
+
+    # Validate persona
+    if persona and persona not in PERSONAS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unknown persona '{persona}'. Valid options: {', '.join(sorted(PERSONAS))}."
+        )
+
+    # Reject oversized uploads before reading the body. Content-Length covers the
+    # whole multipart body, so allow a small overhead for the form-field framing.
+    content_length = request.headers.get("content-length")
+    if content_length and content_length.isdigit():
+        if int(content_length) > MAX_FILE_SIZE_BYTES + 1024 * 1024:
+            raise HTTPException(
+                status_code=413,
+                detail=f"File too large. Max is {MAX_FILE_SIZE_MB} MB."
+            )
 
     # Check concurrency limit
     with _jobs_lock:
@@ -292,13 +322,13 @@ async def upload_and_analyze(
                 detail=f"Server busy ({MAX_CONCURRENT_JOBS} jobs running). Please try again shortly."
             )
 
-    # Get or create browser session
-    session = crud.get_or_create_session(db, datasense_session)
+    # Get or create browser session (tampered/unsigned cookies are ignored)
+    session = crud.get_or_create_session(db, verify_session(datasense_session))
 
-    # Set session cookie — 7 days, httponly
+    # Set signed session cookie — 7 days, httponly
     response.set_cookie(
         key="datasense_session",
-        value=str(session.id),
+        value=sign_session(str(session.id)),
         max_age=60 * 60 * 24 * 7,
         httponly=True,
         samesite="lax",
@@ -313,21 +343,39 @@ async def upload_and_analyze(
         session_id=session.id,
     )
 
-    # Save uploaded file to temp directory
+    # Save uploaded file to temp directory, enforcing the size limit while
+    # streaming — Content-Length can be absent or forged, so the cap must be
+    # applied to the bytes actually received.
     os.makedirs(TEMP_UPLOAD_DIR, exist_ok=True)
     file_path = os.path.join(TEMP_UPLOAD_DIR, f"{job_id}.csv")
     try:
+        bytes_written = 0
         with open(file_path, "wb") as buffer:
-            shutil.copyfileobj(file.file, buffer)
+            while chunk := await file.read(UPLOAD_CHUNK_SIZE):
+                bytes_written += len(chunk)
+                if bytes_written > MAX_FILE_SIZE_BYTES:
+                    raise HTTPException(
+                        status_code=413,
+                        detail=f"File too large. Max is {MAX_FILE_SIZE_MB} MB."
+                    )
+                buffer.write(chunk)
+    except HTTPException:
+        crud.delete_job(db, job_id)
+        if os.path.exists(file_path):
+            os.remove(file_path)
+        raise
     except Exception as e:
         crud.delete_job(db, job_id)
+        if os.path.exists(file_path):
+            os.remove(file_path)
         raise HTTPException(status_code=500, detail=f"Failed to save file: {str(e)}")
 
     # Kick off background pipeline
     background_tasks.add_task(
         run_pipeline, job_id, file_path,
         user_context=context or "",
-        explicit_target=target_column or ""
+        explicit_target=target_column or "",
+        persona=persona or ""
     )
     logger.info(f"[{job_id}] Job created for file: {file.filename}")
 
@@ -413,11 +461,19 @@ def get_results(job_id: str, db: DBSession = Depends(get_db)):
 
 
 @router.delete("/cancel/{job_id}")
-def cancel_job(job_id: str, db: DBSession = Depends(get_db)):
-    """Cancel a queued or running job."""
+def cancel_job(
+    job_id: str,
+    db: DBSession = Depends(get_db),
+    datasense_session: Optional[str] = Cookie(default=None),
+):
+    """Cancel a queued or running job. Only the owning session can cancel."""
     job = crud.get_job(db, job_id)
     if not job:
         raise HTTPException(status_code=404, detail="Job not found.")
+
+    session_id = verify_session(datasense_session)
+    if not session_id or str(job.session_id) != session_id:
+        raise HTTPException(status_code=403, detail="Not authorized to cancel this job.")
 
     cancelled = crud.cancel_job(db, job_id)
     if not cancelled:
@@ -439,10 +495,11 @@ def list_jobs(
     List all jobs for the current browser session.
     Powers the History page.
     """
-    if not datasense_session:
+    session_id = verify_session(datasense_session)
+    if not session_id:
         return {"total": 0, "jobs": []}
 
-    jobs = crud.get_jobs_for_session(db, datasense_session, limit=limit, status=status)
+    jobs = crud.get_jobs_for_session(db, session_id, limit=limit, status=status)
 
     result = []
     for job in jobs:
@@ -476,7 +533,8 @@ def delete_job(
         raise HTTPException(status_code=404, detail="Job not found.")
 
     # Ownership check
-    if not datasense_session or str(job.session_id) != datasense_session:
+    session_id = verify_session(datasense_session)
+    if not session_id or str(job.session_id) != session_id:
         raise HTTPException(status_code=403, detail="Not authorized to delete this job.")
 
     crud.delete_job(db, job_id)
@@ -484,8 +542,18 @@ def delete_job(
 
 
 @router.delete("/jobs")
-def cleanup_jobs(db: DBSession = Depends(get_db)):
-    """Remove jobs older than the retention period."""
+def cleanup_jobs(
+    db: DBSession = Depends(get_db),
+    x_admin_token: Optional[str] = Header(default=None),
+):
+    """
+    Remove jobs older than the retention period.
+    Admin-only: requires the X-Admin-Token header to match ADMIN_TOKEN.
+    Disabled (403) when ADMIN_TOKEN is not configured.
+    """
+    if not ADMIN_TOKEN or not hmac.compare_digest(x_admin_token or "", ADMIN_TOKEN):
+        raise HTTPException(status_code=403, detail="Not authorized.")
+
     removed = crud.cleanup_expired_jobs(db, older_than_hours=JOB_RETENTION_HOURS)
     return {"removed": removed, "message": f"Removed {removed} expired job(s)."}
 
@@ -535,7 +603,10 @@ def export_pdf(job_id: str, db: DBSession = Depends(get_db)):
         logger.error(f"PDF generation failed for job {job_id}: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"PDF generation failed: {str(e)}")
 
-    safe_filename = job.filename.replace('.csv', '').replace(' ', '_')
+    # Whitelist-sanitize the user-supplied filename — anything else (quotes,
+    # CR/LF, unicode) could break out of the Content-Disposition header.
+    stem = re.sub(r'\.csv$', '', job.filename, flags=re.IGNORECASE)
+    safe_filename = re.sub(r'[^A-Za-z0-9._-]', '_', stem).strip('._') or "report"
     filename = f"datasense_report_{safe_filename}.pdf"
 
     return StreamingResponse(

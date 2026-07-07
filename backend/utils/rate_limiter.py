@@ -30,6 +30,10 @@ WINDOW_SECONDS = int(os.getenv("RATE_LIMIT_WINDOW_S", "60"))
 STRICT_MAX_REQUESTS = int(os.getenv("RATE_LIMIT_STRICT_REQUESTS", "10"))
 STRICT_WINDOW_SECONDS = int(os.getenv("RATE_LIMIT_STRICT_WINDOW_S", "60"))
 
+# Only honour X-Forwarded-For when explicitly deployed behind a trusted
+# reverse proxy — otherwise any client can spoof the header and dodge limits.
+TRUST_PROXY = os.getenv("TRUST_PROXY", "false").lower() == "true"
+
 # Paths that get the stricter limit
 _STRICT_PATHS = {"/api/analyze"}
 
@@ -48,10 +52,11 @@ _last_prune: float = 0.0
 
 
 def _get_client_ip(request: Request) -> str:
-    """Best-effort client IP (respects X-Forwarded-For behind a reverse proxy)."""
-    forwarded = request.headers.get("x-forwarded-for")
-    if forwarded:
-        return forwarded.split(",")[0].strip()
+    """Best-effort client IP (respects X-Forwarded-For only when TRUST_PROXY=true)."""
+    if TRUST_PROXY:
+        forwarded = request.headers.get("x-forwarded-for")
+        if forwarded:
+            return forwarded.split(",")[0].strip()
     return request.client.host if request.client else "unknown"
 
 

@@ -218,8 +218,17 @@ Create a `.env` file in the `backend/` directory:
 # Database
 DATABASE_URL=postgresql://datasense_user:datasense123@localhost:5432/datasense
 
-# Authentication
+# Session cookie signing (HMAC). If unset, an ephemeral key is generated and
+# sessions reset on every server restart.
 SECRET_KEY=your-secret-key-here
+
+# Admin token for the cleanup endpoint (DELETE /api/jobs).
+# The endpoint is disabled when this is unset.
+ADMIN_TOKEN=your-admin-token-here
+
+# Set to true only when deployed behind a trusted reverse proxy —
+# enables X-Forwarded-For for rate-limiting client identification.
+TRUST_PROXY=false
 
 # LLM Provider: "ollama" (default), "openai", or "groq"
 LLM_PROVIDER=ollama
@@ -279,7 +288,7 @@ If no AI provider is available, DataSense still works — you get rule-based ins
 
 ## Usage
 
-1. **Upload** — Drag and drop a CSV file (up to 200 MB) on the home page. Optionally expand "Advanced options" to provide domain context or specify a target column. The file is validated for correct encoding, CSV structure, and content before processing.
+1. **Upload** — Drag and drop a CSV file (up to 200 MB) on the home page. Optionally expand "Advanced options" to provide domain context, specify a target column, or pick the insight audience persona (`general`, `executive`, `data_scientist`, `product_manager`) for that analysis. The file is validated for correct encoding, CSV structure, and content before processing.
 2. **Analyze** — Watch the 7-step pipeline process your data in real time.
 3. **Explore results** — Browse findings across six tabs:
    - **Summary** — overview of your data, key story, quick wins, and how many issues were found
