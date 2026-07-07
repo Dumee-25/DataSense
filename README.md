@@ -212,7 +212,14 @@ The app will be available at `http://localhost:3000`. API calls are proxied to t
 
 ### Environment Variables
 
-Create a `.env` file in the `backend/` directory:
+Copy [`backend/.env.example`](backend/.env.example) to `backend/.env` and adjust the values:
+
+```bash
+cd backend
+cp .env.example .env
+```
+
+Full reference:
 
 ```env
 # Database
